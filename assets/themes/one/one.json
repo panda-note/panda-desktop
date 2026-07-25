@@ -226,7 +226,7 @@
           },
           "emphasis": {
             "color": "#74ade8ff",
-            "font_style": null,
+            "font_style": "italic",
             "font_weight": null
           },
           "emphasis.strong": {
@@ -320,12 +320,17 @@
             "font_weight": null
           },
           "punctuation.list_marker": {
-            "color": "#d07277ff",
+            "color": "#878e98ff",
             "font_style": null,
             "font_weight": null
           },
           "punctuation.markup": {
-            "color": "#d07277ff",
+            "color": "#5d636fff",
+            "font_style": null,
+            "font_weight": null
+          },
+          "punctuation.embedded": {
+            "color": "#5d636fff",
             "font_style": null,
             "font_weight": null
           },
@@ -377,12 +382,13 @@
           "text.literal": {
             "color": "#a1c181ff",
             "font_style": null,
-            "font_weight": null
+            "font_weight": null,
+            "background_color": "#3b404a88"
           },
           "title": {
-            "color": "#d07277ff",
+            "color": "#e06c75ff",
             "font_style": null,
-            "font_weight": 400
+            "font_weight": 700
           },
           "type": {
             "color": "#6eb4bfff",
@@ -643,7 +649,7 @@
           },
           "emphasis": {
             "color": "#5c78e2ff",
-            "font_style": null,
+            "font_style": "italic",
             "font_weight": null
           },
           "emphasis.strong": {
@@ -737,12 +743,17 @@
             "font_weight": null
           },
           "punctuation.list_marker": {
-            "color": "#d3604fff",
+            "color": "#7c7e86ff",
             "font_style": null,
             "font_weight": null
           },
           "punctuation.markup": {
-            "color": "#d3604fff",
+            "color": "#a2a3a7ff",
+            "font_style": null,
+            "font_weight": null
+          },
+          "punctuation.embedded": {
+            "color": "#a2a3a7ff",
             "font_style": null,
             "font_weight": null
           },
@@ -794,12 +805,13 @@
           "text.literal": {
             "color": "#649f57ff",
             "font_style": null,
-            "font_weight": null
+            "font_weight": null,
+            "background_color": "#00000010"
           },
           "title": {
             "color": "#d3604fff",
             "font_style": null,
-            "font_weight": 400
+            "font_weight": 700
           },
           "type": {
             "color": "#3882b7ff",

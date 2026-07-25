@@ -3,6 +3,7 @@
 #[cfg(test)]
 mod test;
 
+mod cjk_word;
 mod change_list;
 mod command;
 mod digraph;
@@ -1064,6 +1065,23 @@ impl Vim {
         }
     }
 
+    pub fn buffer_search_bar(&self, window: &Window, cx: &App) -> Option<Entity<BufferSearchBar>> {
+        if let Some(pane) = Workspace::for_window(window, cx)
+            .map(|workspace| workspace.read(cx).focused_pane(window, cx))
+        {
+            if pane.read(cx).focus_handle(cx).contains_focused(window, cx)
+                && let Some(bar) = pane
+                    .read(cx)
+                    .toolbar()
+                    .read(cx)
+                    .item_of_type::<BufferSearchBar>()
+            {
+                return Some(bar);
+            }
+        }
+        search::buffer_search::standalone_buffer_search_bar(cx)
+    }
+
     pub fn enabled(cx: &mut App) -> bool {
         VimModeSetting::get_global(cx).0 || HelixModeSetting::get_global(cx).0
     }
@@ -1508,16 +1526,11 @@ impl Vim {
         // the user has explicitly navigated away - clear prior_selections so we
         // don't restore to the old position if they later dismiss the search.
         if !self.search.prior_selections.is_empty() {
-            if let Some(pane) = self.pane(window, cx) {
-                let search_still_open = pane
-                    .read(cx)
-                    .toolbar()
-                    .read(cx)
-                    .item_of_type::<BufferSearchBar>()
-                    .is_some_and(|bar| !bar.read(cx).is_dismissed());
-                if search_still_open {
-                    self.search.prior_selections.clear();
-                }
+            let search_still_open = self
+                .buffer_search_bar(window, cx)
+                .is_some_and(|bar| !bar.read(cx).is_dismissed());
+            if search_still_open {
+                self.search.prior_selections.clear();
             }
         }
 

@@ -214,7 +214,7 @@ impl Vim {
     }
 
     fn search(&mut self, action: &Search, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pane) = self.pane(window, cx) else {
+        let Some(search_bar) = self.buffer_search_bar(window, cx) else {
             return;
         };
         let direction = if action.backwards {
@@ -225,15 +225,6 @@ impl Vim {
         let count = Vim::take_count(cx).unwrap_or(1);
         Vim::take_forced_motion(cx);
         let prior_selections = self.editor_selections(window, cx);
-
-        let Some(search_bar) = pane
-            .read(cx)
-            .toolbar()
-            .read(cx)
-            .item_of_type::<BufferSearchBar>()
-        else {
-            return;
-        };
 
         let shown = search_bar.update(cx, |search_bar, cx| {
             if !search_bar.show(window, cx) {
@@ -305,18 +296,16 @@ impl Vim {
 
     pub fn search_submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.store_visual_marks(window, cx);
-        let Some(pane) = self.pane(window, cx) else {
+        let Some(search_bar) = self.buffer_search_bar(window, cx) else {
             return;
         };
         let new_selections = self.editor_selections(window, cx);
-        let result = pane.update(cx, |pane, cx| {
-            let search_bar = pane.toolbar().read(cx).item_of_type::<BufferSearchBar>()?;
-            if self.search.helix_select {
-                search_bar.update(cx, |search_bar, cx| {
-                    search_bar.select_all_matches(&Default::default(), window, cx)
-                });
-                return None;
-            }
+        let result = if self.search.helix_select {
+            search_bar.update(cx, |search_bar, cx| {
+                search_bar.select_all_matches(&Default::default(), window, cx)
+            });
+            None
+        } else {
             search_bar.update(cx, |search_bar, cx| {
                 let mut count = self.search.count;
                 let direction = self.search.direction;
@@ -343,7 +332,7 @@ impl Vim {
                 Vim::globals(cx).registers.insert('/', query);
                 Some((prior_selections, prior_mode, prior_operator))
             })
-        });
+        };
 
         let Some((mut prior_selections, prior_mode, prior_operator)) = result else {
             return;
@@ -384,7 +373,7 @@ impl Vim {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(pane) = self.pane(window, cx) else {
+        let Some(search_bar) = self.buffer_search_bar(window, cx) else {
             return;
         };
         let count = Vim::take_count(cx).unwrap_or(1);
@@ -400,17 +389,12 @@ impl Vim {
 
         let prior_selections = self.editor_selections(window, cx);
 
-        let success = pane.update(cx, |pane, cx| {
-            let Some(search_bar) = pane.toolbar().read(cx).item_of_type::<BufferSearchBar>() else {
+        let success = search_bar.update(cx, |search_bar, cx| {
+            if !search_bar.has_active_match() || !search_bar.show(window, cx) {
                 return false;
-            };
-            search_bar.update(cx, |search_bar, cx| {
-                if !search_bar.has_active_match() || !search_bar.show(window, cx) {
-                    return false;
-                }
-                search_bar.select_match(direction, count, window, cx);
-                true
-            })
+            }
+            search_bar.select_match(direction, count, window, cx);
+            true
         });
         if !success {
             return;
@@ -437,7 +421,7 @@ impl Vim {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(pane) = self.pane(window, cx) else {
+        let Some(search_bar) = self.buffer_search_bar(window, cx) else {
             return;
         };
         let count = Vim::take_count(cx).unwrap_or(1);
@@ -454,67 +438,62 @@ impl Vim {
         let prior_selections = self.editor_selections(window, cx);
         let vim = cx.entity();
 
-        let searched = pane.update(cx, |pane, cx| {
-            self.search.direction = direction;
-            let Some(search_bar) = pane.toolbar().read(cx).item_of_type::<BufferSearchBar>() else {
-                return false;
-            };
-            let search = search_bar.update(cx, |search_bar, cx| {
-                let mut options = SearchOptions::NONE;
-                if case_sensitive {
-                    options |= SearchOptions::CASE_SENSITIVE;
-                }
-                if regex {
-                    options |= SearchOptions::REGEX;
-                }
-                if whole_word {
-                    options |= SearchOptions::WHOLE_WORD;
-                }
-                if !search_bar.show(window, cx) {
-                    return None;
-                }
-                let Some(query) = search_bar.query_suggestion(
-                    Some(settings::SeedQuerySetting::Always),
-                    window,
-                    cx,
-                ) else {
-                    drop(search_bar.search("", None, false, window, cx));
-                    return None;
-                };
-
-                let query = regex::escape(&query);
-                Some(search_bar.search(&query, Some(options), true, window, cx))
-            });
-
-            let Some(search) = search else { return false };
-
-            if move_cursor {
-                let search_bar = search_bar.downgrade();
-                cx.spawn_in(window, async move |_, cx| {
-                    search.await?;
-                    search_bar.update_in(cx, |search_bar, window, cx| {
-                        search_bar.select_match(direction, count, window, cx);
-
-                        vim.update(cx, |vim, cx| {
-                            let new_selections = vim.editor_selections(window, cx);
-                            vim.search_motion(
-                                Motion::ZedSearchResult {
-                                    prior_selections,
-                                    new_selections,
-                                },
-                                window,
-                                cx,
-                            )
-                        });
-                    })?;
-                    anyhow::Ok(())
-                })
-                .detach_and_log_err(cx);
+        self.search.direction = direction;
+        let search = search_bar.update(cx, |search_bar, cx| {
+            let mut options = SearchOptions::NONE;
+            if case_sensitive {
+                options |= SearchOptions::CASE_SENSITIVE;
             }
-            true
+            if regex {
+                options |= SearchOptions::REGEX;
+            }
+            if whole_word {
+                options |= SearchOptions::WHOLE_WORD;
+            }
+            if !search_bar.show(window, cx) {
+                return None;
+            }
+            let Some(query) =
+                search_bar.query_suggestion(Some(settings::SeedQuerySetting::Always), window, cx)
+            else {
+                drop(search_bar.search("", None, false, window, cx));
+                return None;
+            };
+
+            let query = regex::escape(&query);
+            Some(search_bar.search(&query, Some(options), true, window, cx))
         });
-        if !searched {
-            self.clear_operator(window, cx)
+
+        let Some(search) = search else {
+            self.clear_operator(window, cx);
+            if self.mode.is_visual() {
+                self.switch_mode(Mode::Normal, false, window, cx)
+            }
+            return;
+        };
+
+        if move_cursor {
+            let search_bar = search_bar.downgrade();
+            cx.spawn_in(window, async move |_, cx| {
+                search.await?;
+                search_bar.update_in(cx, |search_bar, window, cx| {
+                    search_bar.select_match(direction, count, window, cx);
+
+                    vim.update(cx, |vim, cx| {
+                        let new_selections = vim.editor_selections(window, cx);
+                        vim.search_motion(
+                            Motion::ZedSearchResult {
+                                prior_selections,
+                                new_selections,
+                            },
+                            window,
+                            cx,
+                        )
+                    });
+                })?;
+                anyhow::Ok(())
+            })
+            .detach_and_log_err(cx);
         }
 
         if self.mode.is_visual() {
@@ -523,47 +502,43 @@ impl Vim {
     }
 
     fn find_command(&mut self, action: &FindCommand, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pane) = self.pane(window, cx) else {
+        let Some(search_bar) = self.buffer_search_bar(window, cx) else {
             return;
         };
-        pane.update(cx, |pane, cx| {
-            if let Some(search_bar) = pane.toolbar().read(cx).item_of_type::<BufferSearchBar>() {
-                let search = search_bar.update(cx, |search_bar, cx| {
-                    if !search_bar.show(window, cx) {
-                        return None;
-                    }
-                    let mut query = action.query.clone();
-                    if query.is_empty() {
-                        query = search_bar.query(cx);
-                    };
-
-                    let mut options = SearchOptions::REGEX | SearchOptions::CASE_SENSITIVE;
-                    if search_bar.should_use_smartcase_search(cx) {
-                        options.set(
-                            SearchOptions::CASE_SENSITIVE,
-                            search_bar.is_contains_uppercase(&query),
-                        );
-                    }
-
-                    Some(search_bar.search(&query, Some(options), true, window, cx))
-                });
-                let Some(search) = search else { return };
-                let search_bar = search_bar.downgrade();
-                let direction = if action.backwards {
-                    Direction::Prev
-                } else {
-                    Direction::Next
-                };
-                cx.spawn_in(window, async move |_, cx| {
-                    search.await?;
-                    search_bar.update_in(cx, |search_bar, window, cx| {
-                        search_bar.select_match(direction, 1, window, cx)
-                    })?;
-                    anyhow::Ok(())
-                })
-                .detach_and_log_err(cx);
+        let search = search_bar.update(cx, |search_bar, cx| {
+            if !search_bar.show(window, cx) {
+                return None;
             }
+            let mut query = action.query.clone();
+            if query.is_empty() {
+                query = search_bar.query(cx);
+            };
+
+            let mut options = SearchOptions::REGEX | SearchOptions::CASE_SENSITIVE;
+            if search_bar.should_use_smartcase_search(cx) {
+                options.set(
+                    SearchOptions::CASE_SENSITIVE,
+                    search_bar.is_contains_uppercase(&query),
+                );
+            }
+
+            Some(search_bar.search(&query, Some(options), true, window, cx))
+        });
+        let Some(search) = search else { return };
+        let search_bar = search_bar.downgrade();
+        let direction = if action.backwards {
+            Direction::Prev
+        } else {
+            Direction::Next
+        };
+        cx.spawn_in(window, async move |_, cx| {
+            search.await?;
+            search_bar.update_in(cx, |search_bar, window, cx| {
+                search_bar.select_match(direction, 1, window, cx)
+            })?;
+            anyhow::Ok(())
         })
+        .detach_and_log_err(cx);
     }
 
     fn replace_command(

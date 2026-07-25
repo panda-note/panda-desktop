@@ -1081,6 +1081,14 @@
     },
   },
   {
+    "context": "GoToLine > Editor",
+    "use_key_equivalents": true,
+    "bindings": {
+      "enter": "menu::Confirm",
+      "escape": "menu::Cancel"
+    }
+  },
+  {
     "context": "CommitEditor > Editor",
     "use_key_equivalents": true,
     "bindings": {

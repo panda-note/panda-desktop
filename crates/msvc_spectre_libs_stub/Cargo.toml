@@ -1,0 +1,13 @@
+[package]
+name = "msvc_spectre_libs"
+version = "0.1.3"
+edition = "2021"
+description = "Local no-op stub: Spectre MSVC libs are not installed on this machine."
+publish = false
+license = "MIT OR Apache-2.0"
+
+[features]
+error = []
+
+[lib]
+path = "src/lib.rs"

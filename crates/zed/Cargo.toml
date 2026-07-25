@@ -141,7 +141,7 @@ install_cli.workspace = true
 journal.workspace = true
 json_schema_store.workspace = true
 keymap_editor.workspace = true
-language.workspace = true
+language = { workspace = true, features = ["wasm"] }
 language_extension.workspace = true
 language_model.workspace = true
 language_models.workspace = true

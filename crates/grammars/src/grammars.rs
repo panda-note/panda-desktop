@@ -13,33 +13,47 @@ struct GrammarDir;
 ///
 /// Each grammar is registered as a `(&str, tree_sitter_language::LanguageFn)` pair.
 /// This must be called before loading language configs/queries.
-#[cfg(feature = "load-grammars")]
+#[cfg(any(feature = "load-grammars", feature = "notes"))]
 pub fn native_grammars() -> Vec<(&'static str, tree_sitter::Language)> {
-    vec![
-        ("bash", tree_sitter_bash::LANGUAGE.into()),
-        ("c", tree_sitter_c::LANGUAGE.into()),
-        ("cpp", tree_sitter_cpp::LANGUAGE.into()),
-        ("css", tree_sitter_css::LANGUAGE.into()),
-        ("diff", tree_sitter_diff::LANGUAGE.into()),
-        ("go", tree_sitter_go::LANGUAGE.into()),
-        ("gomod", tree_sitter_go_mod::LANGUAGE.into()),
-        ("gowork", tree_sitter_gowork::LANGUAGE.into()),
-        ("jsdoc", tree_sitter_jsdoc::LANGUAGE.into()),
-        ("json", tree_sitter_json::LANGUAGE.into()),
-        ("jsonc", tree_sitter_json::LANGUAGE.into()),
-        ("markdown", tree_sitter_md::LANGUAGE.into()),
-        ("markdown-inline", tree_sitter_md::INLINE_LANGUAGE.into()),
-        ("python", tree_sitter_python::LANGUAGE.into()),
-        ("regex", tree_sitter_regex::LANGUAGE.into()),
-        ("rust", tree_sitter_rust::LANGUAGE.into()),
-        ("tsx", tree_sitter_typescript::LANGUAGE_TSX.into()),
-        (
-            "typescript",
-            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        ),
-        ("yaml", tree_sitter_yaml::LANGUAGE.into()),
-        ("gitcommit", tree_sitter_gitcommit::LANGUAGE.into()),
-    ]
+    #[cfg(feature = "load-grammars")]
+    {
+        vec![
+            ("bash", tree_sitter_bash::LANGUAGE.into()),
+            ("c", tree_sitter_c::LANGUAGE.into()),
+            ("cpp", tree_sitter_cpp::LANGUAGE.into()),
+            ("css", tree_sitter_css::LANGUAGE.into()),
+            ("diff", tree_sitter_diff::LANGUAGE.into()),
+            ("go", tree_sitter_go::LANGUAGE.into()),
+            ("gomod", tree_sitter_go_mod::LANGUAGE.into()),
+            ("gowork", tree_sitter_gowork::LANGUAGE.into()),
+            ("jsdoc", tree_sitter_jsdoc::LANGUAGE.into()),
+            ("json", tree_sitter_json::LANGUAGE.into()),
+            ("jsonc", tree_sitter_json::LANGUAGE.into()),
+            ("markdown", tree_sitter_md::LANGUAGE.into()),
+            ("markdown-inline", tree_sitter_md::INLINE_LANGUAGE.into()),
+            ("python", tree_sitter_python::LANGUAGE.into()),
+            ("regex", tree_sitter_regex::LANGUAGE.into()),
+            ("rust", tree_sitter_rust::LANGUAGE.into()),
+            ("tsx", tree_sitter_typescript::LANGUAGE_TSX.into()),
+            (
+                "typescript",
+                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            ),
+            ("yaml", tree_sitter_yaml::LANGUAGE.into()),
+            ("gitcommit", tree_sitter_gitcommit::LANGUAGE.into()),
+        ]
+    }
+    #[cfg(all(feature = "notes", not(feature = "load-grammars")))]
+    {
+        vec![
+            ("json", tree_sitter_json::LANGUAGE.into()),
+            ("jsonc", tree_sitter_json::LANGUAGE.into()),
+            ("markdown", tree_sitter_md::LANGUAGE.into()),
+            ("markdown-inline", tree_sitter_md::INLINE_LANGUAGE.into()),
+            ("regex", tree_sitter_regex::LANGUAGE.into()),
+            ("yaml", tree_sitter_yaml::LANGUAGE.into()),
+        ]
+    }
 }
 
 /// Load and parse the `config.toml` for a given language name.

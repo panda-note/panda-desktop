@@ -6,6 +6,12 @@
 
 (strikethrough) @strikethrough.markup
 
+; Dim *, _, `, ~~ delimiters (keep markers visible)
+[
+  (emphasis_delimiter)
+  (code_span_delimiter)
+] @punctuation.markup
+
 [
   (inline_link)
   (shortcut_link)
@@ -16,17 +22,41 @@
   (link_label)
 ] @link_text.markup
 
+; Link / image punctuation vs destination
 (inline_link
   [
+    "["
+    "]"
     "("
     ")"
-  ] @link_uri.markup)
+  ] @punctuation.markup)
 
 (image
   [
+    "!"
+    "["
+    "]"
     "("
     ")"
-  ] @link_uri.markup)
+  ] @punctuation.markup)
+
+(shortcut_link
+  [
+    "["
+    "]"
+  ] @punctuation.markup)
+
+(collapsed_reference_link
+  [
+    "["
+    "]"
+  ] @punctuation.markup)
+
+(full_reference_link
+  [
+    "["
+    "]"
+  ] @punctuation.markup)
 
 [
   (link_destination)

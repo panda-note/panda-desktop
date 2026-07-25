@@ -1692,20 +1692,30 @@ pub(crate) fn next_word_start(
         .char_classifier_at(point.to_point(map))
         .ignore_punctuation(ignore_punctuation);
     for _ in 0..times {
-        let mut crossed_newline = false;
-        let new_point =
+        let new_point = if !ignore_punctuation {
+            crate::cjk_word::next_word_start(map, point)
+        } else {
+            None
+        }
+        .unwrap_or_else(|| {
+            let mut crossed_newline = false;
             movement::find_boundary(map, point, FindRange::MultiLine, &mut |left, right| {
                 let left_kind = classifier.kind(left);
                 let right_kind = classifier.kind(right);
                 let at_newline = right == '\n';
+                let cjk_boundary = !ignore_punctuation
+                    && crate::cjk_word::is_cjk_word_char(left)
+                        != crate::cjk_word::is_cjk_word_char(right);
 
                 let found = (left_kind != right_kind && right_kind != CharKind::Whitespace)
+                    || (cjk_boundary && right_kind != CharKind::Whitespace)
                     || at_newline && crossed_newline
                     || at_newline && left == '\n'; // Prevents skipping repeated empty lines
 
                 crossed_newline |= at_newline;
                 found
-            });
+            })
+        });
         if point == new_point {
             break;
         }
@@ -1771,6 +1781,34 @@ pub(crate) fn next_word_end(
         .char_classifier_at(point.to_point(map))
         .ignore_punctuation(ignore_punctuation);
 
+    if !ignore_punctuation {
+        let mut point = point;
+        for _ in 0..times {
+            let new_point = crate::cjk_word::next_word_end(map, point).unwrap_or_else(|| {
+                next_end_impl(
+                    map,
+                    point,
+                    1,
+                    allow_cross_newline,
+                    always_advance,
+                    &mut |left, right| {
+                        let left_kind = classifier.kind(left);
+                        let right_kind = classifier.kind(right);
+                        let cjk_boundary = crate::cjk_word::is_cjk_word_char(left)
+                            != crate::cjk_word::is_cjk_word_char(right);
+                        (left_kind != right_kind && left_kind != CharKind::Whitespace)
+                            || (cjk_boundary && left_kind != CharKind::Whitespace)
+                    },
+                )
+            });
+            if point == new_point {
+                break;
+            }
+            point = new_point;
+        }
+        return point;
+    }
+
     next_end_impl(
         map,
         point,
@@ -1827,19 +1865,31 @@ fn previous_word_start(
         .char_classifier_at(point.to_point(map))
         .ignore_punctuation(ignore_punctuation);
     for _ in 0..times {
-        // This works even though find_preceding_boundary is called for every character in the line containing
-        // cursor because the newline is checked only once.
-        let new_point = movement::find_preceding_boundary_display_point(
-            map,
-            point,
-            FindRange::MultiLine,
-            &mut |left, right| {
-                let left_kind = classifier.kind(left);
-                let right_kind = classifier.kind(right);
+        let new_point = if !ignore_punctuation {
+            crate::cjk_word::previous_word_start(map, point)
+        } else {
+            None
+        }
+        .unwrap_or_else(|| {
+            // This works even though find_preceding_boundary is called for every character in the line containing
+            // cursor because the newline is checked only once.
+            movement::find_preceding_boundary_display_point(
+                map,
+                point,
+                FindRange::MultiLine,
+                &mut |left, right| {
+                    let left_kind = classifier.kind(left);
+                    let right_kind = classifier.kind(right);
+                    let cjk_boundary = !ignore_punctuation
+                        && crate::cjk_word::is_cjk_word_char(left)
+                            != crate::cjk_word::is_cjk_word_char(right);
 
-                (left_kind != right_kind && !right.is_whitespace()) || left == '\n'
-            },
-        );
+                    (left_kind != right_kind && !right.is_whitespace())
+                        || (cjk_boundary && !right.is_whitespace())
+                        || left == '\n'
+                },
+            )
+        });
         if point == new_point {
             break;
         }
@@ -1858,6 +1908,32 @@ fn previous_word_end(
         .buffer_snapshot()
         .char_classifier_at(point.to_point(map))
         .ignore_punctuation(ignore_punctuation);
+
+    if !ignore_punctuation {
+        let mut display_point = point;
+        for _ in 0..times {
+            let new_point =
+                crate::cjk_word::previous_word_end(map, display_point).unwrap_or_else(|| {
+                    classic_previous_word_end(map, display_point, &classifier, 1, true)
+                });
+            if new_point == display_point {
+                break;
+            }
+            display_point = new_point;
+        }
+        return display_point;
+    }
+
+    classic_previous_word_end(map, point, &classifier, times, false)
+}
+
+fn classic_previous_word_end(
+    map: &DisplaySnapshot,
+    point: DisplayPoint,
+    classifier: &language::CharClassifier,
+    times: usize,
+    cjk_script_boundaries: bool,
+) -> DisplayPoint {
     let mut point = point.to_point(map);
 
     if point.column < map.buffer_snapshot().line_len(MultiBufferRow(point.row))
@@ -1873,12 +1949,17 @@ fn previous_word_end(
             &mut |left, right| {
                 let left_kind = classifier.kind(left);
                 let right_kind = classifier.kind(right);
+                let cjk_boundary = cjk_script_boundaries
+                    && crate::cjk_word::is_cjk_word_char(left)
+                        != crate::cjk_word::is_cjk_word_char(right);
                 match (left_kind, right_kind) {
                     (CharKind::Punctuation, CharKind::Whitespace)
                     | (CharKind::Punctuation, CharKind::Word)
                     | (CharKind::Word, CharKind::Whitespace)
                     | (CharKind::Word, CharKind::Punctuation) => true,
                     (CharKind::Whitespace, CharKind::Whitespace) => left == '\n' && right == '\n',
+                    (CharKind::Word, CharKind::Word) if cjk_boundary => true,
+                    (CharKind::Punctuation, CharKind::Punctuation) if cjk_boundary => true,
                     _ => false,
                 }
             },
@@ -5690,5 +5771,68 @@ mod test {
             // second comment
             fn second() { println!("second"); }
         "#});
+    }
+
+    #[gpui::test]
+    async fn test_cjk_jieba_word_motions(cx: &mut gpui::TestAppContext) {
+        let mut cx = VimTestContext::new(cx, true).await;
+
+        // 你好世界 → ["你好", "世界"]
+        cx.set_state("ˇ你好世界", Mode::Normal);
+        cx.simulate_keystrokes("w");
+        cx.assert_state("你好ˇ世界", Mode::Normal);
+        cx.simulate_keystrokes("w");
+        cx.assert_state("你好世ˇ界", Mode::Normal);
+
+        cx.set_state("你好ˇ世界", Mode::Normal);
+        cx.simulate_keystrokes("b");
+        cx.assert_state("ˇ你好世界", Mode::Normal);
+
+        cx.set_state("ˇ你好世界", Mode::Normal);
+        cx.simulate_keystrokes("e");
+        cx.assert_state("你ˇ好世界", Mode::Normal);
+        cx.simulate_keystrokes("e");
+        cx.assert_state("你好世ˇ界", Mode::Normal);
+
+        cx.set_state("你好世ˇ界", Mode::Normal);
+        cx.simulate_keystrokes("g e");
+        cx.assert_state("你ˇ好世界", Mode::Normal);
+
+        // Mixed Latin + CJK: Latin still uses CharKind; CJK uses jieba inside the run.
+        cx.set_state("ˇhello世界foo", Mode::Normal);
+        cx.simulate_keystrokes("w");
+        cx.assert_state("helloˇ世界foo", Mode::Normal);
+        cx.simulate_keystrokes("w");
+        cx.assert_state("hello世界ˇfoo", Mode::Normal);
+        cx.simulate_keystrokes("b");
+        cx.assert_state("helloˇ世界foo", Mode::Normal);
+        cx.simulate_keystrokes("b");
+        cx.assert_state("ˇhello世界foo", Mode::Normal);
+
+        // WORD motions (W/B) ignore jieba and treat the CJK run as one unit with Latin only at spaces.
+        cx.set_state("ˇhello 世界 foo", Mode::Normal);
+        cx.simulate_keystrokes("shift-w");
+        cx.assert_state("hello ˇ世界 foo", Mode::Normal);
+        cx.simulate_keystrokes("shift-w");
+        cx.assert_state("hello 世界 ˇfoo", Mode::Normal);
+    }
+
+    #[gpui::test]
+    async fn test_cjk_jieba_word_object(cx: &mut gpui::TestAppContext) {
+        let mut cx = VimTestContext::new(cx, true).await;
+
+        cx.set_state("ˇ你好世界", Mode::Normal);
+        cx.simulate_keystrokes("d i w");
+        cx.assert_state("ˇ世界", Mode::Normal);
+
+        // After deleting the trailing CJK word, clip_at_line_ends parks the
+        // cursor on the last remaining character.
+        cx.set_state("你好ˇ世界", Mode::Normal);
+        cx.simulate_keystrokes("d i w");
+        cx.assert_state("你ˇ好", Mode::Normal);
+
+        cx.set_state("helloˇ世界foo", Mode::Normal);
+        cx.simulate_keystrokes("d i w");
+        cx.assert_state("helloˇfoo", Mode::Normal);
     }
 }

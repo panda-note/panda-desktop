@@ -17,6 +17,11 @@ load-grammars = [
     "tree-sitter",
     "tree-sitter-gitcommit",
 ]
+# Markdown-focused grammars for the Panda notes client (keeps highlighting, drops IDE languages).
+notes = [
+    "grammars/notes",
+    "tree-sitter",
+]
 
 [dependencies]
 anyhow.workspace = true
@@ -59,7 +64,7 @@ snippet.workspace = true
 task.workspace = true
 terminal.workspace = true
 theme.workspace = true
-tree-sitter = { workspace = true, optional = true , features = ["wasm"] }
+tree-sitter = { workspace = true, optional = true }
 tree-sitter-gitcommit = { workspace = true, optional = true }
 url.workspace = true
 util.workspace = true
@@ -78,5 +83,5 @@ tree-sitter-go.workspace = true
 tree-sitter-python.workspace = true
 tree-sitter-rust.workspace = true
 tree-sitter-typescript.workspace = true
-tree-sitter = { workspace = true, features = ["wasm"] }
+tree-sitter = { workspace = true }
 unindent.workspace = true

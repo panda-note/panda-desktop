@@ -367,10 +367,12 @@ pub(crate) fn zed_default_dark() -> Theme {
                 ("preproc".into(), purple.into()),
                 ("primary".into(), HighlightStyle::default()),
                 ("property".into(), red.into()),
-                ("punctuation".into(), HighlightStyle::default()),
-                ("punctuation.bracket".into(), HighlightStyle::default()),
-                ("punctuation.delimiter".into(), HighlightStyle::default()),
-                ("punctuation.list_marker".into(), HighlightStyle::default()),
+                ("punctuation".into(), gray.into()),
+                ("punctuation.bracket".into(), gray.into()),
+                ("punctuation.delimiter".into(), gray.into()),
+                ("punctuation.list_marker".into(), gray.into()),
+                ("punctuation.markup".into(), gray.into()),
+                ("punctuation.embedded".into(), gray.into()),
                 ("punctuation.special".into(), HighlightStyle::default()),
                 ("string".into(), green.into()),
                 ("string.escape".into(), HighlightStyle::default()),
@@ -378,8 +380,22 @@ pub(crate) fn zed_default_dark() -> Theme {
                 ("string.special".into(), HighlightStyle::default()),
                 ("string.special.symbol".into(), HighlightStyle::default()),
                 ("tag".into(), HighlightStyle::default()),
-                ("text.literal".into(), HighlightStyle::default()),
-                ("title".into(), HighlightStyle::default()),
+                (
+                    "text.literal".into(),
+                    HighlightStyle {
+                        color: Some(green),
+                        background_color: Some(hsla(0., 0., 0.5, 0.15)),
+                        ..HighlightStyle::default()
+                    },
+                ),
+                (
+                    "title".into(),
+                    HighlightStyle {
+                        color: Some(red),
+                        font_weight: Some(FontWeight::BOLD),
+                        ..HighlightStyle::default()
+                    },
+                ),
                 ("type".into(), teal.into()),
                 ("variable".into(), HighlightStyle::default()),
                 ("variable.special".into(), red.into()),

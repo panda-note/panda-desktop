@@ -321,6 +321,8 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
     });
     Vim::action(editor, cx, |vim, _: &VisualCommand, window, cx| {
         let Some(workspace) = vim.workspace(window, cx) else {
+            // Hosts without Workspace (e.g. Panda) still open the command palette.
+            window.dispatch_action(zed_actions::command_palette::Toggle.boxed_clone(), cx);
             return;
         };
         workspace.update(cx, |workspace, cx| {
@@ -330,6 +332,7 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
 
     Vim::action(editor, cx, |vim, _: &ShellCommand, window, cx| {
         let Some(workspace) = vim.workspace(window, cx) else {
+            window.dispatch_action(zed_actions::command_palette::Toggle.boxed_clone(), cx);
             return;
         };
         workspace.update(cx, |workspace, cx| {
@@ -849,6 +852,7 @@ pub fn register(editor: &mut Editor, cx: &mut Context<Vim>) {
 
     Vim::action(editor, cx, |vim, _: &CountCommand, window, cx| {
         let Some(workspace) = vim.workspace(window, cx) else {
+            window.dispatch_action(zed_actions::command_palette::Toggle.boxed_clone(), cx);
             return;
         };
         let count = Vim::take_count(cx).unwrap_or(1);

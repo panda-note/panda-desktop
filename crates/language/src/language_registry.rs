@@ -454,19 +454,28 @@ impl LanguageRegistry {
 
     /// Adds paths to WASM grammar files, which can be loaded if needed.
     pub fn register_wasm_grammars(&self, grammars: Vec<(Arc<str>, PathBuf)>) {
-        if grammars.is_empty() {
+        #[cfg(not(feature = "wasm"))]
+        {
+            let _ = grammars;
             return;
         }
 
-        let mut state = self.state.write();
-        state.grammars.extend(
-            grammars
-                .into_iter()
-                .map(|(name, path)| (name, AvailableGrammar::Unloaded(path))),
-        );
-        state.version += 1;
-        state.reload_count += 1;
-        *state.subscription.0.borrow_mut() = ();
+        #[cfg(feature = "wasm")]
+        {
+            if grammars.is_empty() {
+                return;
+            }
+
+            let mut state = self.state.write();
+            state.grammars.extend(
+                grammars
+                    .into_iter()
+                    .map(|(name, path)| (name, AvailableGrammar::Unloaded(path))),
+            );
+            state.version += 1;
+            state.reload_count += 1;
+            *state.subscription.0.borrow_mut() = ();
+        }
     }
 
     pub fn language_settings(&self) -> AllLanguageSettingsContent {
@@ -990,41 +999,55 @@ impl LanguageRegistry {
                     txs.push(tx);
                 }
                 AvailableGrammar::Unloaded(wasm_path) => {
-                    log::trace!("start loading grammar {name:?}");
-                    let this = self.clone();
-                    let wasm_path = wasm_path.clone();
-                    *grammar = AvailableGrammar::Loading(wasm_path.clone(), vec![tx]);
-                    self.executor
-                        .spawn(async move {
-                            let grammar_result = maybe!({
-                                let wasm_bytes = std::fs::read(&wasm_path)?;
-                                let grammar_name = wasm_path
-                                    .file_stem()
-                                    .and_then(OsStr::to_str)
-                                    .context("invalid grammar filename")?;
-                                anyhow::Ok(with_parser(|parser| {
-                                    let mut store = parser.take_wasm_store().unwrap();
-                                    let grammar = store.load_language(grammar_name, &wasm_bytes);
-                                    parser.set_wasm_store(store).unwrap();
-                                    grammar
-                                })?)
-                            })
-                            .map_err(Arc::new);
+                    #[cfg(not(feature = "wasm"))]
+                    {
+                        let _ = wasm_path;
+                        tx.send(Err(Arc::new(anyhow!(
+                            "WASM grammars are disabled in this build"
+                        ))))
+                        .ok();
+                    }
+                    #[cfg(feature = "wasm")]
+                    {
+                        log::trace!("start loading grammar {name:?}");
+                        let this = self.clone();
+                        let wasm_path = wasm_path.clone();
+                        *grammar = AvailableGrammar::Loading(wasm_path.clone(), vec![tx]);
+                        self.executor
+                            .spawn(async move {
+                                let grammar_result = maybe!({
+                                    let wasm_bytes = std::fs::read(&wasm_path)?;
+                                    let grammar_name = wasm_path
+                                        .file_stem()
+                                        .and_then(OsStr::to_str)
+                                        .context("invalid grammar filename")?;
+                                    anyhow::Ok(with_parser(|parser| {
+                                        let mut store = parser.take_wasm_store().unwrap();
+                                        let grammar =
+                                            store.load_language(grammar_name, &wasm_bytes);
+                                        parser.set_wasm_store(store).unwrap();
+                                        grammar
+                                    })?)
+                                })
+                                .map_err(Arc::new);
 
-                            let value = match &grammar_result {
-                                Ok(grammar) => AvailableGrammar::Loaded(wasm_path, grammar.clone()),
-                                Err(error) => AvailableGrammar::LoadFailed(error.clone()),
-                            };
+                                let value = match &grammar_result {
+                                    Ok(grammar) => {
+                                        AvailableGrammar::Loaded(wasm_path, grammar.clone())
+                                    }
+                                    Err(error) => AvailableGrammar::LoadFailed(error.clone()),
+                                };
 
-                            log::trace!("finish loading grammar {name:?}");
-                            let old_value = this.state.write().grammars.insert(name, value);
-                            if let Some(AvailableGrammar::Loading(_, txs)) = old_value {
-                                for tx in txs {
-                                    tx.send(grammar_result.clone()).ok();
+                                log::trace!("finish loading grammar {name:?}");
+                                let old_value = this.state.write().grammars.insert(name, value);
+                                if let Some(AvailableGrammar::Loading(_, txs)) = old_value {
+                                    for tx in txs {
+                                        tx.send(grammar_result.clone()).ok();
+                                    }
                                 }
-                            }
-                        })
-                        .detach();
+                            })
+                            .detach();
+                    }
                 }
             }
         } else {

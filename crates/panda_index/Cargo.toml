@@ -1,0 +1,13 @@
+[package]
+name = "panda_index"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+description = "Panda Note local full-text search index."
+
+[lints]
+workspace = true
+
+[dependencies]
+panda_core.workspace = true

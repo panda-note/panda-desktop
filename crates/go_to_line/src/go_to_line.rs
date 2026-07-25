@@ -22,6 +22,9 @@ pub fn init(cx: &mut App) {
 }
 
 pub struct GoToLine {
+    /// Parent focus handle so `on_action` stays on the focus path while the
+    /// line editor (returned by [`Focusable`]) holds keyboard focus.
+    focus_handle: FocusHandle,
     line_editor: Entity<Editor>,
     active_editor: Entity<Editor>,
     active_buffer: Entity<Buffer>,
@@ -131,6 +134,53 @@ impl GoToLine {
             );
             editor
         });
+
+        // Focus stays on the line editor; also handle Confirm/Cancel/Newline there so
+        // Enter works even when the parent view is not on the focus path.
+        let go_to_line = cx.weak_entity();
+        line_editor.update(cx, |editor, _cx| {
+            editor
+                .register_action::<menu::Confirm>({
+                    let go_to_line = go_to_line.clone();
+                    move |_: &menu::Confirm, window, cx| {
+                        let Some(this) = go_to_line.upgrade() else {
+                            return;
+                        };
+                        this.update(cx, |this, cx| {
+                            this.confirm(&menu::Confirm, window, cx);
+                        });
+                    }
+                })
+                .detach();
+            editor
+                .register_action::<menu::Cancel>({
+                    let go_to_line = go_to_line.clone();
+                    move |_: &menu::Cancel, window, cx| {
+                        let Some(this) = go_to_line.upgrade() else {
+                            return;
+                        };
+                        this.update(cx, |this, cx| {
+                            this.cancel(&menu::Cancel, window, cx);
+                        });
+                    }
+                })
+                .detach();
+            // Some contexts map Enter to Newline; treat that as confirm in this modal.
+            editor
+                .register_action::<editor::actions::Newline>({
+                    let go_to_line = go_to_line.clone();
+                    move |_: &editor::actions::Newline, window, cx| {
+                        let Some(this) = go_to_line.upgrade() else {
+                            return;
+                        };
+                        this.update(cx, |this, cx| {
+                            this.confirm(&menu::Confirm, window, cx);
+                        });
+                    }
+                })
+                .detach();
+        });
+
         let line_editor_change = cx.subscribe_in(&line_editor, window, Self::on_line_editor_event);
 
         let current_text = format!(
@@ -141,6 +191,7 @@ impl GoToLine {
         );
 
         Self {
+            focus_handle: cx.focus_handle(),
             line_editor,
             active_editor,
             active_buffer,
@@ -166,13 +217,20 @@ impl GoToLine {
         &mut self,
         _: &Entity<Editor>,
         event: &editor::EditorEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match event {
             editor::EditorEvent::Blurred => {
-                self.prev_scroll_position.take();
-                cx.emit(DismissEvent)
+                // Defer dismiss one frame so mount/focus races (e.g. AppShell overlay
+                // focusing after the first paint) do not immediately tear the modal down.
+                cx.defer_in(window, |this, window, cx| {
+                    if this.line_editor.focus_handle(cx).is_focused(window) {
+                        return;
+                    }
+                    this.prev_scroll_position.take();
+                    cx.emit(DismissEvent);
+                });
             }
             editor::EditorEvent::BufferEdited => self.highlight_current_line(cx),
             _ => {}
@@ -286,9 +344,22 @@ impl GoToLine {
     }
 
     fn confirm(&mut self, _: &menu::Confirm, window: &mut Window, cx: &mut Context<Self>) {
-        self.active_editor.update(cx, |editor, cx| {
+        // Empty query → jump using the placeholder (current line:column).
+        if self.line_editor.read(cx).text(cx).trim().is_empty() {
+            let text = self
+                .line_editor
+                .update(cx, |editor, cx| editor.placeholder_text(cx))
+                .unwrap_or_else(|| {
+                    format!("{}{}1", self.current_line, FILE_ROW_COLUMN_DELIMITER)
+                });
+            self.line_editor.update(cx, |editor, cx| {
+                editor.set_text(text, window, cx);
+            });
+        }
+
+        let jumped = self.active_editor.update(cx, |editor, cx| {
             let Some(start) = self.anchor_from_query(editor, cx) else {
-                return;
+                return false;
             };
             editor.change_selections(
                 SelectionEffects::scroll(Autoscroll::center()),
@@ -297,10 +368,13 @@ impl GoToLine {
                 |s| s.select_anchor_ranges([start..start]),
             );
             editor.focus_handle(cx).focus(window, cx);
-            cx.notify()
+            cx.notify();
+            true
         });
+        if !jumped {
+            return;
+        }
         self.prev_scroll_position.take();
-
         cx.emit(DismissEvent);
     }
 }
@@ -327,6 +401,7 @@ impl Render for GoToLine {
         v_flex()
             .w(rems(24.))
             .elevation_2(cx)
+            .track_focus(&self.focus_handle)
             .key_context("GoToLine")
             .on_action(cx.listener(Self::cancel))
             .on_action(cx.listener(Self::confirm))

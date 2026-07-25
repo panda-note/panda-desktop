@@ -1,0 +1,49 @@
+[
+  {
+    "context": "Workspace",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-n": "panda::NewMemo",
+      "ctrl-s": "workspace::Save",
+      "ctrl-shift-r": "panda::Refresh",
+      "ctrl-shift-backspace": "panda::DeleteMemo",
+      "ctrl-,": "panda::OpenSettings",
+      "ctrl-shift-p": "command_palette::Toggle",
+      "ctrl-shift-v": "panda::TogglePreview",
+      "ctrl-b": "panda::ToggleNavPane",
+      "ctrl-shift-b": "panda::ToggleStatusBar",
+      "ctrl-alt-i": "panda::OpenInstances"
+    }
+  },
+  {
+    "context": "Editor",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-n": "panda::NewMemo",
+      "ctrl-s": "workspace::Save",
+      "ctrl-shift-r": "panda::Refresh",
+      "ctrl-shift-backspace": "panda::DeleteMemo",
+      "ctrl-,": "panda::OpenSettings",
+      "ctrl-shift-p": "command_palette::Toggle",
+      "ctrl-shift-v": "panda::TogglePreview",
+      "ctrl-b": "panda::ToggleNavPane",
+      "ctrl-shift-b": "panda::ToggleStatusBar",
+      "ctrl-alt-i": "panda::OpenInstances",
+
+      "alt-shift-1": "markdown::ToggleHeading1",
+      "alt-shift-2": "markdown::ToggleHeading2",
+      "alt-shift-3": "markdown::ToggleHeading3",
+      "ctrl-alt-b": "markdown::ToggleBold",
+      "ctrl-alt-shift-i": "markdown::ToggleItalic",
+      "ctrl-alt-x": "markdown::ToggleStrikethrough",
+      "ctrl-alt-c": "markdown::ToggleInlineCode",
+      "ctrl-alt-shift-c": "markdown::ToggleCodeBlock",
+      "ctrl-alt-q": "markdown::ToggleBlockQuote",
+      "ctrl-alt-u": "markdown::ToggleUnorderedList",
+      "ctrl-alt-o": "markdown::ToggleOrderedList",
+      "ctrl-alt-t": "markdown::ToggleTaskList",
+      "ctrl-alt-k": "markdown::InsertLink",
+      "ctrl-alt-minus": "markdown::InsertHorizontalRule"
+    }
+  }
+]

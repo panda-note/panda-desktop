@@ -1,0 +1,15 @@
+[package]
+name = "panda_sync"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+description = "Panda Note sync queue, conflict handling, and incremental sync."
+
+[lints]
+workspace = true
+
+[dependencies]
+panda_api.workspace = true
+panda_core.workspace = true
+panda_store.workspace = true

@@ -809,6 +809,12 @@ fn in_word(
     ignore_punctuation: bool,
     times: usize,
 ) -> Option<Range<DisplayPoint>> {
+    if !ignore_punctuation
+        && let Some(range) = crate::cjk_word::word_range(map, relative_to, times)
+    {
+        return Some(range);
+    }
+
     // Use motion::right so that we consider the character under the cursor when looking for the start
     let classifier = map
         .buffer_snapshot()
@@ -818,17 +824,32 @@ fn in_word(
         map,
         right(map, relative_to, 1),
         movement::FindRange::SingleLine,
-        &mut |left, right| classifier.kind(left) != classifier.kind(right),
+        &mut |left, right| {
+            classifier.kind(left) != classifier.kind(right)
+                || (!ignore_punctuation
+                    && crate::cjk_word::is_cjk_word_char(left)
+                        != crate::cjk_word::is_cjk_word_char(right))
+        },
     );
 
     let mut end = movement::find_boundary(
         map,
         relative_to,
         FindRange::SingleLine,
-        &mut |left, right| classifier.kind(left) != classifier.kind(right),
+        &mut |left, right| {
+            classifier.kind(left) != classifier.kind(right)
+                || (!ignore_punctuation
+                    && crate::cjk_word::is_cjk_word_char(left)
+                        != crate::cjk_word::is_cjk_word_char(right))
+        },
     );
 
-    let mut is_boundary = |left: char, right: char| classifier.kind(left) != classifier.kind(right);
+    let mut is_boundary = |left: char, right: char| {
+        classifier.kind(left) != classifier.kind(right)
+            || (!ignore_punctuation
+                && crate::cjk_word::is_cjk_word_char(left)
+                    != crate::cjk_word::is_cjk_word_char(right))
+    };
 
     for _ in 1..times {
         let kind_at_end = map

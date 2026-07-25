@@ -1,4 +1,6 @@
 [build]
+# Z: source tree; build artifacts on D: (disk space)
+target-dir = "D:/cargo-target/panda-desktop"
 # v0 mangling scheme provides more detailed backtraces around closures
 rustflags = ["-C", "symbol-mangling-version=v0", "--cfg", "tokio_unstable"]
 

@@ -13,6 +13,10 @@ path = "src/language.rs"
 doctest = false
 
 [features]
+# Default off: Panda builds without wasmtime. Zed enables `wasm` explicitly.
+default = []
+# WASM grammar loading (extension grammars).
+wasm = ["tree-sitter/wasm"]
 test-support = [
     "rand",
     "collections/test-support",
@@ -68,7 +72,7 @@ tree-sitter-md = { workspace = true, optional = true }
 tree-sitter-python = { workspace = true, optional = true }
 tree-sitter-rust = { workspace = true, optional = true }
 tree-sitter-typescript = { workspace = true, optional = true }
-tree-sitter = { workspace = true, features = ["wasm"] }
+tree-sitter = { workspace = true }
 unicase = "2.6"
 util.workspace = true
 watch.workspace = true

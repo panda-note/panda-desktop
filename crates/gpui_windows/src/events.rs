@@ -640,8 +640,46 @@ impl WindowsWindowInner {
                 ImmAssociateContextEx(handle, HIMC::default(), IACE_DEFAULT)
                     .ok()
                     .log_err();
+                if let Some(ctx) = ImeContext::get(handle) {
+                    if let Some(saved) = self.state.saved_ime.take() {
+                        // Re-entering text input: restore the IME open/conversion
+                        // state captured when we last left (e.g. vim InsertLeave).
+                        ImmSetOpenStatus(*ctx, saved.open).ok().log_err();
+                        ImmSetConversionStatus(*ctx, saved.conversion, saved.sentence)
+                            .ok()
+                            .log_err();
+                    } else {
+                        // No prior state (cold start / first enable): prefer English
+                        // so digits and commands are not swallowed by CJK composition.
+                        ImmSetOpenStatus(*ctx, false).ok().log_err();
+                        let mut conversion = IME_CMODE_ALPHANUMERIC;
+                        let mut sentence = IME_SENTENCE_MODE(0);
+                        let _ = ImmGetConversionStatus(
+                            *ctx,
+                            Some(&mut conversion),
+                            Some(&mut sentence),
+                        );
+                        conversion.0 &= !IME_CMODE_NATIVE.0;
+                        ImmSetConversionStatus(*ctx, conversion, sentence)
+                            .ok()
+                            .log_err();
+                    }
+                }
             } else {
                 if let Some(ctx) = ImeContext::get(handle) {
+                    let open = ImmGetOpenStatus(*ctx).as_bool();
+                    let mut conversion = IME_CMODE_ALPHANUMERIC;
+                    let mut sentence = IME_SENTENCE_MODE(0);
+                    let _ = ImmGetConversionStatus(
+                        *ctx,
+                        Some(&mut conversion),
+                        Some(&mut sentence),
+                    );
+                    self.state.saved_ime.set(Some(SavedImeState {
+                        open,
+                        conversion,
+                        sentence,
+                    }));
                     ImmNotifyIME(*ctx, NI_COMPOSITIONSTR, CPS_COMPLETE, 0)
                         .ok()
                         .log_err();

@@ -403,6 +403,38 @@ actions!(
         /// Toggles a block quote (`> `) prefix on the selected lines (or the
         /// current line) while in Markdown files.
         ToggleBlockQuote,
+        /// Toggle heading level 1.
+        ToggleHeading1,
+        /// Toggle heading level 2.
+        ToggleHeading2,
+        /// Toggle heading level 3.
+        ToggleHeading3,
+        /// Toggle heading level 4.
+        ToggleHeading4,
+        /// Toggle heading level 5.
+        ToggleHeading5,
+        /// Toggle heading level 6.
+        ToggleHeading6,
+        /// Toggle unordered list markers.
+        ToggleUnorderedList,
+        /// Toggle ordered list markers.
+        ToggleOrderedList,
+        /// Toggle task list markers.
+        ToggleTaskList,
+        /// Toggle bold emphasis.
+        ToggleBold,
+        /// Toggle italic emphasis.
+        ToggleItalic,
+        /// Toggle strikethrough.
+        ToggleStrikethrough,
+        /// Toggle inline code.
+        ToggleInlineCode,
+        /// Toggle a fenced code block around the selection.
+        ToggleCodeBlock,
+        /// Insert a markdown link.
+        InsertLink,
+        /// Insert a horizontal rule.
+        InsertHorizontalRule,
     ]
 );
 

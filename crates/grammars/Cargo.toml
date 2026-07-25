@@ -56,4 +56,11 @@ load-grammars = [
     "tree-sitter-typescript",
     "tree-sitter-yaml",
 ]
+notes = [
+    "tree-sitter",
+    "tree-sitter-json",
+    "tree-sitter-md",
+    "tree-sitter-regex",
+    "tree-sitter-yaml",
+]
 test-support = ["load-grammars", "tree-sitter/wasm"]

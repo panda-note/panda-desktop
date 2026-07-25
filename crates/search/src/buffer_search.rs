@@ -20,9 +20,9 @@ use editor::{
 };
 use futures::channel::oneshot;
 use gpui::{
-    App, ClickEvent, Context, Entity, EventEmitter, Focusable, InteractiveElement as _,
-    IntoElement, KeyContext, ParentElement as _, Render, ScrollHandle, Styled, Subscription, Task,
-    TaskExt, WeakEntity, Window, div,
+    App, ClickEvent, Context, Entity, EventEmitter, Focusable, Global, InteractiveElement as _,
+    IntoElement, KeyContext, ParentElement as _, Pixels, Render, ScrollHandle, Styled,
+    Subscription, Task, TaskExt, WeakEntity, Window, div,
 };
 use language::{Language, LanguageRegistry};
 use project::{
@@ -64,6 +64,24 @@ pub fn init(cx: &mut App) {
         .detach();
 }
 
+/// Window-less hosts (e.g. Panda) can register a BufferSearchBar for vim `/` and Deploy.
+#[derive(Default)]
+pub struct StandaloneBufferSearchBar(pub Option<WeakEntity<BufferSearchBar>>);
+
+impl Global for StandaloneBufferSearchBar {}
+
+pub fn set_standalone_buffer_search_bar(bar: Option<&Entity<BufferSearchBar>>, cx: &mut App) {
+    cx.set_global(StandaloneBufferSearchBar(
+        bar.map(|entity| entity.downgrade()),
+    ));
+}
+
+pub fn standalone_buffer_search_bar(cx: &App) -> Option<Entity<BufferSearchBar>> {
+    cx.try_global::<StandaloneBufferSearchBar>()
+        .and_then(|global| global.0.as_ref())
+        .and_then(|weak| weak.upgrade())
+}
+
 pub struct BufferSearchBar {
     query_editor: Entity<Editor>,
     query_editor_focused: bool,
@@ -94,6 +112,8 @@ pub struct BufferSearchBar {
     regex_language: Option<Arc<Language>>,
     splittable_editor: Option<WeakEntity<SplittableEditor>>,
     _splittable_editor_subscription: Option<Subscription>,
+    /// When set, use this width instead of viewport-based SearchInputWidth.
+    input_width_override: Option<Pixels>,
 }
 
 impl EventEmitter<Event> for BufferSearchBar {}
@@ -218,7 +238,10 @@ impl Render for BufferSearchBar {
         let replacement_border = theme_colors.border;
 
         let container_width = window.viewport_size().width;
-        let input_width = SearchInputWidth::calc_width(container_width);
+        let compact = self.input_width_override.is_some();
+        let input_width = self
+            .input_width_override
+            .unwrap_or_else(|| SearchInputWidth::calc_width(container_width));
 
         let input_base_styles =
             |border_color| input_base_styles(border_color, |div| div.w(input_width));
@@ -264,7 +287,7 @@ impl Render for BufferSearchBar {
 
         let mode_column = h_flex()
             .gap_1()
-            .min_w_64()
+            .when(!compact, |this| this.min_w_64())
             .when(replacement, |this| {
                 this.child(render_action_button(
                     "buffer-search-bar-toggle",
@@ -370,6 +393,7 @@ impl Render for BufferSearchBar {
         let search_line = h_flex()
             .w_full()
             .gap_2()
+            .when(compact, |this| this.min_w_0())
             .when(find_in_results, |el| el.child(alignment_element()))
             .when(!find_in_results && has_collapse_button, |el| {
                 el.pl_0p5().child(collapse_expand_button.expect("button"))
@@ -387,7 +411,7 @@ impl Render for BufferSearchBar {
             let focus_handle = self.replacement_editor.read(cx).focus_handle(cx);
 
             let replace_actions = h_flex()
-                .min_w_64()
+                .when(!compact, |this| this.min_w_64())
                 .gap_1()
                 .child(render_action_button(
                     "buffer-search-replace-button",
@@ -409,6 +433,7 @@ impl Render for BufferSearchBar {
             h_flex()
                 .w_full()
                 .gap_2()
+                .when(compact, |this| this.min_w_0())
                 .when(has_collapse_button, |this| this.child(alignment_element()))
                 .child(replace_column)
                 .child(replace_actions)
@@ -457,6 +482,7 @@ impl Render for BufferSearchBar {
             .id("buffer_search")
             .gap_2()
             .w_full()
+            .when(compact, |this| this.min_w_0())
             .track_scroll(&self.scroll_handle)
             .key_context(key_context)
             .capture_action(cx.listener(Self::tab))
@@ -811,7 +837,15 @@ impl BufferSearchBar {
             regex_language: None,
             splittable_editor: None,
             _splittable_editor_subscription: None,
+            input_width_override: None,
         }
+    }
+
+    /// Constrain the search input width (e.g. for note apps embedding the bar
+    /// in a narrow pane instead of a full-window toolbar).
+    pub fn set_input_width_override(&mut self, width: Option<Pixels>, cx: &mut Context<Self>) {
+        self.input_width_override = width;
+        cx.notify();
     }
 
     pub fn is_dismissed(&self) -> bool {

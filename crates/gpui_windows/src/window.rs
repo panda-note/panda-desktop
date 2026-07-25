@@ -23,7 +23,10 @@ use windows::{
         System::{
             Com::*, Diagnostics::Debug::MessageBeep, LibraryLoader::*, Ole::*, SystemServices::*,
         },
-        UI::{Controls::*, HiDpi::*, Input::KeyboardAndMouse::*, Shell::*, WindowsAndMessaging::*},
+        UI::{
+            Controls::*, HiDpi::*, Input::Ime::*, Input::KeyboardAndMouse::*, Shell::*,
+            WindowsAndMessaging::*,
+        },
     },
     core::*,
 };
@@ -42,6 +45,13 @@ impl std::ops::Deref for WindowsWindow {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct SavedImeState {
+    pub open: bool,
+    pub conversion: IME_CONVERSION_MODE,
+    pub sentence: IME_SENTENCE_MODE,
+}
+
 pub struct WindowsWindowState {
     pub origin: Cell<Point<Pixels>>,
     pub logical_size: Cell<Size<Pixels>>,
@@ -56,6 +66,8 @@ pub struct WindowsWindowState {
     pub callbacks: Callbacks,
     pub input_handler: Cell<Option<PlatformInputHandler>>,
     pub ime_enabled: Cell<bool>,
+    /// IME open/conversion snapshot taken when leaving text input, restored on re-enter.
+    pub saved_ime: Cell<Option<SavedImeState>>,
     pub pending_surrogate: Cell<Option<u16>>,
     pub last_reported_modifiers: Cell<Option<Modifiers>>,
     pub last_reported_capslock: Cell<Option<Capslock>>,
@@ -163,6 +175,7 @@ impl WindowsWindowState {
             callbacks,
             input_handler: Cell::new(input_handler),
             ime_enabled: Cell::new(true),
+            saved_ime: Cell::new(None),
             pending_surrogate: Cell::new(pending_surrogate),
             last_reported_modifiers: Cell::new(last_reported_modifiers),
             last_reported_capslock: Cell::new(last_reported_capslock),

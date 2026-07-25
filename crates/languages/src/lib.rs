@@ -54,7 +54,7 @@ pub static LANGUAGE_GIT_COMMIT: std::sync::LazyLock<Arc<Language>> =
     });
 
 pub fn init(languages: Arc<LanguageRegistry>, fs: Arc<dyn Fs>, node: NodeRuntime, cx: &mut App) {
-    #[cfg(feature = "load-grammars")]
+    #[cfg(any(feature = "load-grammars", feature = "notes"))]
     languages.register_native_grammars(grammars::native_grammars());
 
     let bash_lsp_adapter = Arc::new(bash::BashLspAdapter::new(node.clone()));
@@ -383,6 +383,6 @@ pub fn language(name: &str, grammar: tree_sitter::Language) -> Arc<Language> {
 }
 
 fn load_config(name: &str) -> LanguageConfig {
-    let grammars_loaded = cfg!(any(feature = "load-grammars", test));
+    let grammars_loaded = cfg!(any(feature = "load-grammars", feature = "notes", test));
     grammars::load_config_for_feature(name, grammars_loaded)
 }

@@ -151,6 +151,14 @@ members = [
     "crates/open_router",
     "crates/outline",
     "crates/outline_panel",
+    "crates/panda",
+    "crates/panda_api",
+    "crates/panda_core",
+    "crates/panda_index",
+    "crates/panda_session",
+    "crates/panda_store",
+    "crates/panda_sync",
+    "crates/panda_ui",
     "crates/panel",
     "crates/path",
     "crates/paths",
@@ -415,6 +423,14 @@ open_path_prompt = { path = "crates/open_path_prompt" }
 open_router = { path = "crates/open_router", features = ["schemars"] }
 outline = { path = "crates/outline" }
 outline_panel = { path = "crates/outline_panel" }
+panda = { path = "crates/panda" }
+panda_api = { path = "crates/panda_api" }
+panda_core = { path = "crates/panda_core" }
+panda_index = { path = "crates/panda_index" }
+panda_session = { path = "crates/panda_session" }
+panda_store = { path = "crates/panda_store" }
+panda_sync = { path = "crates/panda_sync" }
+panda_ui = { path = "crates/panda_ui" }
 panel = { path = "crates/panel" }
 paths = { path = "crates/paths" }
 path = { path = "crates/path" }
@@ -850,6 +866,7 @@ tree-sitter-typescript = { git = "https://github.com/zed-industries/tree-sitter-
 tree-sitter-yaml = { git = "https://github.com/zed-industries/tree-sitter-yaml", rev = "baff0b51c64ef6a1fb1f8390f3ad6015b83ec13a" }
 tracing = "0.1.40"
 unicase = "2.6"
+jieba-rs = "0.10.3"
 unicode-script = "0.5.7"
 unicode-segmentation = "1.10"
 unicode-width = "0.2"
@@ -947,6 +964,10 @@ features = [
 ]
 
 [patch.crates-io]
+# Local machines without Spectre-mitigated MSVC libs: pet enables
+# msvc_spectre_libs/error and would otherwise fail the build. Prefer
+# installing "MSVC … Spectre-mitigated libs" via VS Installer when possible.
+msvc_spectre_libs = { path = "crates/msvc_spectre_libs_stub" }
 async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
 async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
 windows-capture = { git = "https://github.com/zed-industries/windows-capture.git", rev = "f0d6c1b6691db75461b732f6d5ff56eed002eeb9" }
@@ -1050,6 +1071,16 @@ inherits = "release"
 debug = "full"
 lto = false
 codegen-units = 16
+
+# Minimal binary size for shipping Panda (no debuginfo, fat LTO, size opts).
+[profile.release-size]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = false
+strip = "symbols"
+incremental = false
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "allow" }
