@@ -22,15 +22,43 @@ Help wanted: upstream fork engineering, WYSIWYG design, and Zed-native
 multimedia. See the project site:
 https://panda-note.github.io/panda-note/#help-desktop
 
-## Build (Windows debug)
+## Build
 
-```powershell
-$env:CARGO_HOME = 'D:\ch'
-$env:CARGO_TARGET_DIR = 'D:\cargo-target\panda-desktop'
+You need a recent Rust toolchain (see `rust-toolchain.toml`) and a normal
+native build environment for your OS (MSVC on Windows, Xcode CLT on macOS,
+usual C/C++ deps on Linux — same bar as building Zed).
+
+### Release build (default)
+
+There is **no CI packaging** for now (GitHub Actions minutes are limited). Build
+locally with the `release-size` profile when you want a shippable binary:
+size-first opts, fat LTO, stripped symbols.
+
+```sh
+cargo build -p panda --profile release-size
+```
+
+Output (path depends on your `CARGO_TARGET_DIR` / Cargo defaults):
+
+```text
+target/release-size/panda      # macOS / Linux
+target/release-size/panda.exe  # Windows
+```
+
+If you publish a GitHub Release later, attach a binary built this way.
+
+### Debug build
+
+Day-to-day iteration:
+
+```sh
 cargo build -p panda
 ```
 
-Binary: `D:\cargo-target\panda-desktop\debug\panda.exe`
+```text
+target/debug/panda
+target/debug/panda.exe
+```
 
 ## Branch model
 
