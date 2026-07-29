@@ -314,12 +314,12 @@ impl ApiClient {
         .await
     }
 
-    pub async fn delete_todo(&self, todo: &Todo) -> Result<(), ApiError> {
+    pub async fn delete_todo(&self, todo: &Todo, permanent: bool) -> Result<(), ApiError> {
         let _: serde_json::Value = self
             .request_json(
                 reqwest::Method::DELETE,
                 &format!(
-                    "/todos/{}?base_revision={}&if_match_etag={}",
+                    "/todos/{}?base_revision={}&if_match_etag={}&permanent={permanent}",
                     todo.id, todo.revision, todo.etag
                 ),
                 &self.token,
@@ -660,8 +660,8 @@ impl ApiClient {
     ) -> Result<Todo, ApiError> {
         runtime().block_on(self.set_todo_completed(todo, completed))
     }
-    pub fn delete_todo_blocking(&self, todo: &Todo) -> Result<(), ApiError> {
-        runtime().block_on(self.delete_todo(todo))
+    pub fn delete_todo_blocking(&self, todo: &Todo, permanent: bool) -> Result<(), ApiError> {
+        runtime().block_on(self.delete_todo(todo, permanent))
     }
 
     pub fn restore_todo_blocking(&self, todo: &Todo) -> Result<Todo, ApiError> {

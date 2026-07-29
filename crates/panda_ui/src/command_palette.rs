@@ -17,8 +17,8 @@ use ui::prelude::*;
 use ui::{Button, KeyBinding, ListItem, ListItemSpacing};
 
 use crate::panda_actions::{
-    DeleteMemo, FormatMemo, GoToLine, NewMemo, OpenInstances, OpenSettings, Refresh, SaveMemo,
-    ToggleNavPane, TogglePreview, ToggleStatusBar,
+    DeleteMemo, FormatMemo, GoToLine, NewMemo, OpenInstances, OpenSettings, Quit, Refresh,
+    SaveMemo, ToggleNavPane, TogglePreview, ToggleStatusBar,
 };
 use crate::shell::AppShell;
 use crate::state::Mode;
@@ -30,6 +30,9 @@ enum PaletteItem {
     },
     GoToLine {
         line: u32,
+        label: SharedString,
+    },
+    SaveAndQuit {
         label: SharedString,
     },
 }
@@ -92,6 +95,10 @@ impl PandaCommandPalette {
         let q = raw.trim().to_lowercase();
         let mut items = Vec::new();
 
+        if let Some(command) = parse_vim_command(&raw) {
+            items.push(command);
+        }
+
         if let Some(line) = parse_go_to_line_query(&raw) {
             items.push(PaletteItem::GoToLine {
                 line,
@@ -143,8 +150,44 @@ impl PandaCommandPalette {
                     jump_to_line_in_active_editor(line, window, cx);
                 });
             }
+            PaletteItem::SaveAndQuit { .. } => {
+                if let Some(prev) = self.previous_focus.take() {
+                    window.focus(&prev, cx);
+                }
+                cx.emit(DismissEvent);
+                window.defer(cx, move |window, cx| {
+                    window.dispatch_action(Box::new(SaveMemo), cx);
+                    cx.quit();
+                });
+            }
         }
     }
+}
+
+fn parse_vim_command(raw: &str) -> Option<PaletteItem> {
+    let command = raw
+        .trim()
+        .trim_start_matches(':')
+        .trim()
+        .to_ascii_lowercase();
+    let (label, action) = match command.as_str() {
+        "w" | "write" => (
+            "Vim: :w — Save",
+            Box::new(SaveMemo) as Box<dyn gpui::Action>,
+        ),
+        "q" | "quit" | "qa" | "qall" => ("Vim: :q — Quit", Box::new(Quit) as Box<dyn gpui::Action>),
+        "wq" | "x" | "wqa" | "xa" => {
+            return Some(PaletteItem::SaveAndQuit {
+                label: "Vim: :wq — Save and quit".into(),
+            });
+        }
+        _ => return None,
+    };
+
+    Some(PaletteItem::Action {
+        label: label.into(),
+        action,
+    })
 }
 
 fn parse_go_to_line_query(raw: &str) -> Option<u32> {
@@ -216,6 +259,7 @@ impl Render for PandaCommandPalette {
                         (label.clone(), Some(action.boxed_clone()))
                     }
                     PaletteItem::GoToLine { label, .. } => (label.clone(), None),
+                    PaletteItem::SaveAndQuit { label } => (label.clone(), None),
                 };
                 let selected = row == self.selected;
                 let row_id = SharedString::from(format!("cmd-{row}"));
@@ -379,7 +423,7 @@ fn panda_entries() -> Vec<(SharedString, Box<dyn gpui::Action>)> {
         entry("Markdown: Insert Horizontal Rule", InsertHorizontalRule),
         // View
         entry("View: Toggle Navigation", ToggleNavPane),
-        entry("View: Toggle Markdown Preview", TogglePreview),
+        entry("View: Cycle Markdown View", TogglePreview),
         entry("View: Toggle Status Bar", ToggleStatusBar),
         // App
         entry("App: Instances…", OpenInstances),

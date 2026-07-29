@@ -9,7 +9,7 @@ use platform_title_bar::PlatformTitleBar;
 use settings::{Settings, SettingsStore};
 use theme::ActiveTheme;
 use ui::prelude::*;
-use ui::{Divider, SwitchField, ToggleState};
+use ui::{ContextMenu, Divider, DropdownMenu, SwitchField, ToggleState};
 use vim_mode_setting::VimModeSetting;
 use workspace::client_side_decorations;
 
@@ -17,11 +17,12 @@ use panda_session::app_data_dir;
 
 use crate::shell::AppShell;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct PandaPrefs {
     vim: bool,
     line_numbers: bool,
     breakpoints: bool,
+    theme: String,
 }
 
 pub struct SettingsWindow {
@@ -49,7 +50,7 @@ impl SettingsWindow {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                         None,
-                        size(px(480.), px(460.)),
+                        size(px(480.), px(540.)),
                         cx,
                     ))),
                     titlebar: Some(TitlebarOptions {
@@ -92,12 +93,14 @@ impl SettingsWindow {
             vim: VimModeSetting::get_global(cx).0,
             line_numbers: gutter.line_numbers,
             breakpoints: gutter.breakpoints,
+            theme: cx.theme().name.to_string(),
         }
     }
 
     fn persist_prefs(cx: &mut App, prefs: PandaPrefs) {
         let json = format!(
             r#"{{
+                "theme": "{theme}",
                 "vim_mode": {vim},
                 "base_keymap": "VSCode",
                 "gutter": {{
@@ -110,6 +113,7 @@ impl SettingsWindow {
             vim = prefs.vim,
             line_numbers = prefs.line_numbers,
             breakpoints = prefs.breakpoints,
+            theme = prefs.theme,
         );
         SettingsStore::update_global(cx, |store, cx| {
             let _ = store.set_user_settings(&json, cx);
@@ -164,6 +168,18 @@ impl SettingsWindow {
         Self::apply_and_refresh_gutter(cx, prefs);
         cx.notify();
     }
+
+    fn select_theme(&mut self, theme: &'static str, cx: &mut Context<Self>) {
+        let mut prefs = Self::current_prefs(cx);
+        if prefs.theme == theme {
+            return;
+        }
+        prefs.theme = theme.into();
+        Self::persist_prefs(cx, prefs);
+        // theme_settings observes SettingsStore and refreshes every Panda
+        // window, including the editor syntax theme, without recreating it.
+        cx.notify();
+    }
 }
 
 impl Focusable for SettingsWindow {
@@ -195,6 +211,18 @@ impl Render for SettingsWindow {
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     )
+                    .child(Divider::horizontal())
+                    .child(Label::new("Appearance").size(LabelSize::Default))
+                    .child(
+                        Label::new("Theme")
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .child(DropdownMenu::new(
+                        "settings-theme",
+                        prefs.theme.clone(),
+                        theme_menu(_window, cx),
+                    ))
                     .child(Divider::horizontal())
                     .child(SwitchField::new(
                         "toggle-vim",
@@ -248,4 +276,31 @@ impl Render for SettingsWindow {
             )
             .map(|root| client_side_decorations(root, _window, cx))
     }
+}
+
+fn theme_menu(window: &mut Window, cx: &mut Context<SettingsWindow>) -> Entity<ContextMenu> {
+    const THEMES: &[&str] = &[
+        "One Dark",
+        "One Light",
+        "Ayu Dark",
+        "Ayu Light",
+        "Gruvbox Dark",
+        "Gruvbox Dark Hard",
+        "Gruvbox Dark Soft",
+        "Gruvbox Light",
+        "Gruvbox Light Hard",
+        "Gruvbox Light Soft",
+    ];
+    let entity = cx.weak_entity();
+    ContextMenu::build(window, cx, move |menu, _, _| {
+        THEMES.iter().fold(menu, |menu, theme| {
+            let entity = entity.clone();
+            let theme = *theme;
+            menu.entry(theme, None, move |_window, cx| {
+                entity
+                    .update(cx, |this, cx| this.select_theme(theme, cx))
+                    .ok();
+            })
+        })
+    })
 }

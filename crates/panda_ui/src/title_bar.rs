@@ -115,22 +115,38 @@ impl AppShell {
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.delete_selected(window, cx)
                                     })),
-                            ))
-                            .when(todo_workspace, |this| this.child(
+                            )
+                            .when(todo_workspace && !todo_trash, |this| this.child(
                                 IconButton::new(
                                     "title-todo-delete",
-                                    if todo_trash { IconName::GenericRestore } else { IconName::Trash },
+                                    IconName::Trash,
                                 )
                                     .icon_size(IconSize::Small)
                                     .style(ButtonStyle::Subtle)
-                                    .tooltip(Tooltip::text(if todo_trash { "Restore task" } else { "Move task to trash" }))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        if todo_trash {
-                                            this.restore_selected_todo(window, cx);
-                                        } else {
-                                            this.delete_selected_todo(window, cx);
-                                        }
+                                    .tooltip(Tooltip::text("Move task to trash"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.delete_selected_todo(window, cx);
                                     })),
+                            ))
+                            .when(todo_workspace && todo_trash, |this| this
+                                .child(
+                                    IconButton::new("title-todo-restore", IconName::GenericRestore)
+                                        .icon_size(IconSize::Small)
+                                        .style(ButtonStyle::Subtle)
+                                        .tooltip(Tooltip::text("Restore task"))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.restore_selected_todo(window, cx);
+                                        })),
+                                )
+                                .child(
+                                    IconButton::new("title-todo-permanent-delete", IconName::Trash)
+                                        .icon_size(IconSize::Small)
+                                        .style(ButtonStyle::Subtle)
+                                        .tooltip(Tooltip::text("Delete permanently (cannot be undone)"))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.permanently_delete_selected_todo(window, cx);
+                                        })),
+                                ),
                             ))
                             .when(todo_workspace && !todo_trash, |this| this.child(
                                 IconButton::new("title-todo-save", IconName::CheckDouble)
@@ -154,7 +170,7 @@ impl AppShell {
                                 IconButton::new("title-preview", IconName::Eye)
                                     .icon_size(IconSize::Small)
                                     .style(ButtonStyle::Subtle)
-                                    .tooltip(Tooltip::text("Toggle preview"))
+                                    .tooltip(Tooltip::text("Cycle Source / Live / Read"))
                                     .on_click(
                                         cx.listener(|this, _, _window, cx| this.toggle_preview(cx)),
                             )),

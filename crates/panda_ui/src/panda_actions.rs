@@ -17,7 +17,7 @@ actions!(
         DeleteMemo,
         /// Refresh notebooks and memos from the server.
         Refresh,
-        /// Toggle markdown preview beside the editor.
+        /// Cycle Source, Live and Read Markdown projections.
         TogglePreview,
         /// Toggle the bottom status bar.
         ToggleStatusBar,
@@ -77,7 +77,7 @@ pub fn app_menus() -> Vec<gpui::Menu> {
             items: vec![
                 MenuItem::action("Command Palette…", ToggleCommandPalette),
                 MenuItem::action("Toggle Navigation", ToggleNavPane),
-                MenuItem::action("Toggle Markdown Preview", TogglePreview),
+                MenuItem::action("Cycle Markdown View", TogglePreview),
                 MenuItem::action("Toggle Status Bar", ToggleStatusBar),
             ],
         },

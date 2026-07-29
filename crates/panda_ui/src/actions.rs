@@ -12,7 +12,7 @@ use uuid::Uuid;
 use workspace::ToolbarItemView;
 
 use crate::shell::AppShell;
-use crate::state::{MainState, Mode, SetupState, WorkspaceMode};
+use crate::state::{MainState, MemoDisplayMode, Mode, SetupState, WorkspaceMode};
 use crate::widgets::{display_title, field_editor};
 
 impl AppShell {
@@ -165,7 +165,7 @@ impl AppShell {
             Mode::Setup(_) => return,
         };
         cx.spawn_in(window, async move |this, cx| {
-            let result = smol::unblock(move || client.delete_todo_blocking(&todo)).await;
+            let result = smol::unblock(move || client.delete_todo_blocking(&todo, false)).await;
             this.update_in(cx, |this, window, cx| {
                 match result {
                     Ok(()) => {
@@ -229,6 +229,58 @@ impl AppShell {
                         if let Mode::Main(main) = &mut this.mode {
                             main.error = Some(error.to_string().into());
                             main.status = "Restore task failed".into();
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn permanently_delete_selected_todo(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let todo = match &self.mode {
+            Mode::Main(main) => main
+                .selected_todo_id
+                .as_deref()
+                .and_then(|id| main.todos.iter().find(|(todo, _)| todo.id == id))
+                .map(|(todo, _)| todo.clone()),
+            Mode::Setup(_) => None,
+        };
+        let Some(todo) = todo else {
+            return;
+        };
+        if !todo.is_deleted {
+            return;
+        }
+        let client = match &self.mode {
+            Mode::Main(main) => main.client.clone(),
+            Mode::Setup(_) => return,
+        };
+        cx.spawn_in(window, async move |this, cx| {
+            let result = smol::unblock(move || client.delete_todo_blocking(&todo, true)).await;
+            this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok(()) => {
+                        if let Mode::Main(main) = &mut this.mode {
+                            main.selected_todo_id = None;
+                            main.todo_title_editor = None;
+                            main.todo_note_editor = None;
+                            main.todo_due_date_editor = None;
+                            main.todo_priority_editor = None;
+                            main.status = "Task permanently deleted".into();
+                        }
+                        this.refresh_remote(window, cx);
+                    }
+                    Err(error) => {
+                        if let Mode::Main(main) = &mut this.mode {
+                            main.error = Some(error.to_string().into());
+                            main.status = "Permanent delete task failed".into();
                         }
                     }
                 }
@@ -411,9 +463,9 @@ impl AppShell {
         let _ = self.session.set_active(&instance.id);
         let _ = store.set_meta("active_instance", &instance.id);
         let client = panda_api::ApiClient::new(instance.api_url.clone(), instance.token.clone());
-        let preview_visible = match &self.mode {
-            Mode::Main(main) => main.preview_visible,
-            _ => false,
+        let memo_display_mode = match &self.mode {
+            Mode::Main(main) => main.memo_display_mode,
+            _ => Default::default(),
         };
         let (nav_width, list_width) = MainState::load_pane_widths(&store);
         let nav_collapsed = MainState::load_nav_collapsed(&store);
@@ -445,10 +497,12 @@ impl AppShell {
             search_results: None,
             available_tags: Vec::new(),
             preview: None,
-            preview_visible,
+            memo_display_mode,
             status: "Loading...".into(),
             error: None,
             save_generation: 0,
+            draft_generation: 0,
+            preview_generation: 0,
             save_in_flight: false,
             save_pending: false,
             nav_width,
@@ -896,21 +950,11 @@ impl AppShell {
                                 cx,
                             )
                         });
-                        let preview_for_sub = preview.downgrade();
                         main._buffer_sub =
                             Some(cx.subscribe(&buffer, move |this, _, event, cx| {
                                 if let language::BufferEvent::Edited { .. } = event {
                                     this.schedule_save(&memo_id_for_sub, cx);
-                                    if let Mode::Main(main) = &this.mode {
-                                        if let Some(editor) = &main.editor {
-                                            let text = editor.read(cx).text(cx);
-                                            preview_for_sub
-                                                .update(cx, |md, cx| {
-                                                    md.replace(SharedString::from(text), cx);
-                                                })
-                                                .ok();
-                                        }
-                                    }
+                                    this.schedule_preview_update(false, cx);
                                 }
                             }));
 
@@ -987,14 +1031,10 @@ impl AppShell {
         }
 
         let text = editor.read(cx).text(cx);
-        active.markdown = text.clone();
+        active.markdown = text;
+        let state_changed = active.sync_state != SyncState::LocalModified;
         active.sync_state = SyncState::LocalModified;
-        let _ = main
-            .store
-            .save_draft(memo_id, &text, SyncState::LocalModified);
-        let excerpt = panda_core::derive_excerpt(&text, 240);
         if let Some((summary, state)) = main.memos.iter_mut().find(|(m, _)| m.id == memo_id) {
-            summary.excerpt = excerpt;
             if summary.title != active.title {
                 summary.title = active.title.clone();
             }
@@ -1003,11 +1043,44 @@ impl AppShell {
         main.status = "LocalModified".into();
         main.save_generation += 1;
         let save_gen = main.save_generation;
+        main.draft_generation += 1;
+        let draft_gen = main.draft_generation;
         let id = active.id.clone();
+        let draft_store = main.store.clone();
+
+        // A local crash-safe draft is important, but SQLite work on every key
+        // stroke is visible on long notes. Persist only the settled buffer.
+        cx.spawn({
+            let id = id.clone();
+            async move |this, cx| {
+                smol::Timer::after(Duration::from_millis(300)).await;
+                let draft = this
+                    .read_with(cx, |this, cx| match &this.mode {
+                        Mode::Main(main)
+                            if main.draft_generation == draft_gen
+                                && main.active.as_ref().is_some_and(|a| a.id == id) =>
+                        {
+                            main.editor.as_ref().map(|editor| editor.read(cx).text(cx))
+                        }
+                        _ => None,
+                    })
+                    .ok()
+                    .flatten();
+                if let Some(draft) = draft {
+                    let _ = smol::unblock(move || {
+                        draft_store.save_draft(&id, &draft, SyncState::LocalModified)
+                    })
+                    .await;
+                }
+            }
+        })
+        .detach();
 
         if main.save_in_flight {
             main.save_pending = true;
-            cx.notify();
+            if state_changed {
+                cx.notify();
+            }
             return;
         }
 
@@ -1028,7 +1101,54 @@ impl AppShell {
             .ok();
         })
         .detach();
-        cx.notify();
+        // The editor redraws its own buffer. Re-rendering the entire three-pane
+        // shell for every keystroke is unnecessary; notify only when the sync
+        // indicator actually changes.
+        if state_changed {
+            cx.notify();
+        }
+    }
+
+    /// Update the rendered projection only when it is actually visible. The
+    /// Markdown component parses whole documents, so coalescing keystrokes here
+    /// keeps the Vim/editor input path independent from preview cost.
+    fn schedule_preview_update(&mut self, immediate: bool, cx: &mut Context<Self>) {
+        let (generation, preview) = {
+            let Mode::Main(main) = &mut self.mode else {
+                return;
+            };
+            if main.memo_display_mode == MemoDisplayMode::Source {
+                return;
+            }
+            let Some(preview) = main.preview.clone() else {
+                return;
+            };
+            main.preview_generation += 1;
+            (main.preview_generation, preview)
+        };
+        cx.spawn(async move |this, cx| {
+            if !immediate {
+                smol::Timer::after(Duration::from_millis(180)).await;
+            }
+            let source = this
+                .read_with(cx, |this, cx| match &this.mode {
+                    Mode::Main(main)
+                        if main.preview_generation == generation
+                            && main.memo_display_mode != MemoDisplayMode::Source =>
+                    {
+                        main.editor.as_ref().map(|editor| editor.read(cx).text(cx))
+                    }
+                    _ => None,
+                })
+                .ok()
+                .flatten();
+            if let Some(source) = source {
+                preview.update(cx, |markdown, cx| {
+                    markdown.replace(SharedString::from(source), cx);
+                });
+            }
+        })
+        .detach();
     }
 
     /// Send one save using the latest local etag/markdown. Serializes via `save_in_flight`.
@@ -1408,8 +1528,28 @@ impl AppShell {
     }
 
     pub(crate) fn toggle_preview(&mut self, cx: &mut Context<Self>) {
+        let next = match &self.mode {
+            Mode::Main(main) => match main.memo_display_mode {
+                crate::state::MemoDisplayMode::Source => crate::state::MemoDisplayMode::Live,
+                crate::state::MemoDisplayMode::Live => crate::state::MemoDisplayMode::Read,
+                crate::state::MemoDisplayMode::Read => crate::state::MemoDisplayMode::Source,
+            },
+            Mode::Setup(_) => return,
+        };
+        self.set_memo_display_mode(next, cx);
+    }
+
+    pub(crate) fn set_memo_display_mode(
+        &mut self,
+        mode: crate::state::MemoDisplayMode,
+        cx: &mut Context<Self>,
+    ) {
+        let should_sync_preview = matches!(mode, MemoDisplayMode::Live | MemoDisplayMode::Read);
         if let Mode::Main(main) = &mut self.mode {
-            main.preview_visible = !main.preview_visible;
+            main.memo_display_mode = mode;
+        }
+        if should_sync_preview {
+            self.schedule_preview_update(true, cx);
         }
         cx.notify();
     }

@@ -12,8 +12,8 @@ use ui::{
 
 use crate::panda_actions::NewMemo;
 use crate::shell::AppShell;
-use crate::state::Mode;
 use crate::state::WorkspaceMode;
+use crate::state::{MemoDisplayMode, Mode};
 use crate::widgets::{
     filtered_tag_suggestions, notebook_breadcrumb_path, removable_tag_chip, sync_indicator,
 };
@@ -39,7 +39,7 @@ impl AppShell {
             .clone()
             .filter(|bar| !bar.read(cx).is_dismissed());
         let preview = main.preview.clone();
-        let preview_visible = main.preview_visible;
+        let memo_display_mode = main.memo_display_mode;
         let sync_state = main.active.as_ref().map(|a| a.sync_state);
         let active_id = main.active.as_ref().map(|a| a.id.clone());
         let active_tags = main
@@ -206,7 +206,9 @@ impl AppShell {
 
         let mut body = h_flex().flex_1().w_full().min_w_0().overflow_hidden();
         if let Some(editor) = editor {
-            body = body.child(div().flex_1().min_w_0().h_full().p_2().child(editor));
+            if memo_display_mode != MemoDisplayMode::Read {
+                body = body.child(div().flex_1().min_w_0().h_full().p_2().child(editor));
+            }
         } else {
             let focus = self.focus_handle(cx);
             let new_memo_binding = KeyBinding::for_action_in(&NewMemo, &focus, cx);
@@ -268,13 +270,21 @@ impl AppShell {
                     ),
             );
         }
-        if preview_visible {
+        if memo_display_mode != MemoDisplayMode::Source {
             if let Some(preview) = preview {
                 body = body.child(
                     div()
-                        .w(px(360.))
+                        .when(memo_display_mode == MemoDisplayMode::Live, |this| {
+                            this.flex_1()
+                        })
+                        .when(memo_display_mode == MemoDisplayMode::Read, |this| {
+                            this.flex_1()
+                        })
+                        .min_w_0()
                         .h_full()
-                        .border_l_1()
+                        .when(memo_display_mode == MemoDisplayMode::Live, |this| {
+                            this.border_l_1()
+                        })
                         .border_color(cx.theme().colors().border)
                         .p_3()
                         .overflow_hidden()
@@ -339,6 +349,7 @@ impl AppShell {
         let note_editor = main.todo_note_editor.clone();
         let due_date_editor = main.todo_due_date_editor.clone();
         let priority_editor = main.todo_priority_editor.clone();
+        let todo_save_in_flight = main.todo_save_in_flight;
         let mut pane = v_flex()
             .flex_1()
             .h_full()
@@ -362,15 +373,26 @@ impl AppShell {
             let due_menu = todo_due_menu(window, cx);
             let priority_menu = todo_priority_menu(window, cx);
             let title = title_editor.map(|editor| {
+                let focus = editor.read(cx).focus_handle(cx);
                 div()
+                    .id("todo-title-input")
                     .h(px(36.))
                     .flex_1()
                     .min_w_0()
                     .flex()
                     .items_center()
                     .px_2()
+                    .track_focus(&focus)
+                    .on_action(cx.listener(|this, _: &Confirm, window, cx| {
+                        this.save_todo(window, cx);
+                    }))
                     .child(editor)
             });
+            let save_label = if todo_save_in_flight {
+                "Saving…"
+            } else {
+                "Save"
+            };
             let metadata = h_flex()
                 .w_full()
                 .gap_2()
@@ -438,7 +460,16 @@ impl AppShell {
                                     this.toggle_todo(id.clone(), window, cx);
                                 })),
                         )
-                        .children(title),
+                        .children(title)
+                        .child(
+                            Button::new("todo-save", save_label)
+                                .style(ButtonStyle::Tinted(TintColor::Accent))
+                                .disabled(todo_save_in_flight)
+                                .tooltip(ui::Tooltip::text("Save task (Enter in title, Ctrl+S)"))
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.save_todo(window, cx)),
+                                ),
+                        ),
                 )
                 .child(metadata)
                 .child(Divider::horizontal().color(DividerColor::BorderFaded))
@@ -451,16 +482,7 @@ impl AppShell {
                         .rounded_md()
                         .bg(cx.theme().colors().editor_background)
                         .child(editor)
-                }))
-                .child(
-                    h_flex().w_full().pt_2().justify_end().child(
-                        Button::new("todo-save", "Save")
-                            .style(ButtonStyle::Tinted(TintColor::Accent))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.save_todo(window, cx)),
-                            ),
-                    ),
-                );
+                }));
         } else {
             pane = pane.child(Label::new("Select a task").color(Color::Muted));
         }

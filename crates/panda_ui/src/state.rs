@@ -27,6 +27,19 @@ pub(crate) enum WorkspaceMode {
     Todos,
 }
 
+/// How memo Markdown is presented.  The document always remains the same
+/// `editor::Editor` buffer; this only changes its projection on screen.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum MemoDisplayMode {
+    /// The established editor-only experience (including Vim and buffer search).
+    #[default]
+    Source,
+    /// Keep the editor interactive while showing its rendered Markdown beside it.
+    Live,
+    /// A distraction-free rendered view. Switching back never changes the buffer.
+    Read,
+}
+
 pub(crate) struct SetupState {
     pub name: Entity<Editor>,
     pub api_url: Entity<Editor>,
@@ -129,10 +142,14 @@ pub(crate) struct MainState {
     pub search_results: Option<Vec<(MemoSummary, SyncState)>>,
     pub available_tags: Vec<String>,
     pub preview: Option<Entity<markdown::Markdown>>,
-    pub preview_visible: bool,
+    pub memo_display_mode: MemoDisplayMode,
     pub status: SharedString,
     pub error: Option<SharedString>,
     pub save_generation: u64,
+    /// Generation counters coalesce expensive post-edit work.  The editor itself
+    /// remains synchronous; disk and rendered projections only see settled text.
+    pub draft_generation: u64,
+    pub preview_generation: u64,
     pub save_in_flight: bool,
     pub save_pending: bool,
     pub nav_width: Pixels,

@@ -202,35 +202,62 @@ impl AppShell {
                             .color(Color::Muted),
                     ),
             );
-            for tag in available_tags {
-                let selected_tag =
-                    matches!(&filter, NavFilter::Tag(name) if name.eq_ignore_ascii_case(&tag));
-                let tag_name = tag.clone();
-                nav = nav.child(
-                    div()
-                        .id(SharedString::from(format!("tag-wrap-{tag}")))
-                        .w_full()
-                        .on_mouse_down(MouseButton::Right, |_, _, cx| {
-                            cx.stop_propagation();
-                        })
-                        .child(nav_item(
-                            format!("tag-{tag}"),
-                            IconName::Hash,
-                            tag,
-                            selected_tag,
-                            0,
-                            None,
-                            None,
-                            cx,
-                            move |this, _, _, cx| {
+            nav = nav.child(
+                h_flex()
+                    .w_full()
+                    .flex_wrap()
+                    .gap_1()
+                    .px_2()
+                    .on_mouse_down(MouseButton::Right, |_, _, cx| {
+                        cx.stop_propagation();
+                    })
+                    .children(available_tags.into_iter().map(|tag| {
+                        let selected_tag = matches!(
+                            &filter,
+                            NavFilter::Tag(name) if name.eq_ignore_ascii_case(&tag)
+                        );
+                        let tag_name = tag.clone();
+                        let text_color = if selected_tag {
+                            Color::Accent
+                        } else {
+                            Color::Muted
+                        };
+                        div()
+                            .id(SharedString::from(format!("tag-{tag}")))
+                            .h(px(24.))
+                            .max_w(px(150.))
+                            .min_w_0()
+                            .px_2()
+                            .gap_1()
+                            .rounded_sm()
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .bg(if selected_tag {
+                                cx.theme().colors().text_accent.opacity(0.16)
+                            } else {
+                                cx.theme().colors().ghost_element_background
+                            })
+                            .hover(|style| style.bg(cx.theme().colors().element_hover))
+                            .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Mode::Main(main) = &mut this.mode {
                                     main.filter = NavFilter::Tag(tag_name.clone());
                                 }
                                 cx.notify();
-                            },
-                        )),
-                );
-            }
+                            }))
+                            .child(
+                                Icon::new(IconName::Hash)
+                                    .size(IconSize::XSmall)
+                                    .color(text_color),
+                            )
+                            .child(
+                                Label::new(tag)
+                                    .size(LabelSize::XSmall)
+                                    .color(text_color)
+                                    .truncate(),
+                            )
+                    })),
+            );
         }
 
         nav = nav.child(

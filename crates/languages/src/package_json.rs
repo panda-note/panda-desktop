@@ -1,9 +1,11 @@
+#[cfg(feature = "load-grammars")]
 use chrono::{DateTime, Local};
 use collections::{BTreeSet, HashMap};
 use serde_json_lenient::Value;
 use std::{path::Path, sync::Arc};
 
 #[derive(Clone, Debug)]
+#[cfg(feature = "load-grammars")]
 pub struct PackageJson {
     pub mtime: DateTime<Local>,
     pub data: PackageJsonData,
@@ -94,6 +96,7 @@ impl PackageJsonData {
         }
     }
 
+    #[cfg(feature = "load-grammars")]
     pub fn merge(&mut self, other: Self) {
         self.jest_package_path = self.jest_package_path.take().or(other.jest_package_path);
         self.mocha_package_path = self.mocha_package_path.take().or(other.mocha_package_path);
