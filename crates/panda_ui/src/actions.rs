@@ -3,10 +3,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use editor::Editor;
-use gpui::{Context, Focusable, SharedString, Window, prelude::*, px};
+use gpui::{Context, Entity, Focusable, SharedString, Window, prelude::*, px};
 use language::{Buffer, language_settings::SoftWrap};
-use panda_core::{MemoSummary, NavFilter, SyncState, Todo, TodoFilter, TodoStatus};
+use panda_core::{
+    MemoSummary, NavFilter, SyncState, Todo, TodoFilter, TodoOperation, TodoOperationKind,
+    TodoStatus,
+};
 use panda_session::app_data_dir;
+use panda_sync::SyncEngine;
 use settings::Settings;
 use uuid::Uuid;
 use workspace::ToolbarItemView;
@@ -14,6 +18,50 @@ use workspace::ToolbarItemView;
 use crate::shell::AppShell;
 use crate::state::{MainState, MemoDisplayMode, Mode, SetupState, WorkspaceMode};
 use crate::widgets::{display_title, field_editor};
+
+fn queue_todo_operation(
+    main: &MainState,
+    todo: &Todo,
+    kind: TodoOperationKind,
+    base_revision: Option<u64>,
+    if_match_etag: Option<String>,
+) {
+    let depends_on_write_id = main
+        .store
+        .pending_todo_operations()
+        .ok()
+        .and_then(|ops| ops.into_iter().rev().find(|op| op.todo_id == todo.id))
+        .map(|op| {
+            if op.write_id.is_empty() {
+                op.operation_id
+            } else {
+                op.write_id
+            }
+        });
+    let operation_id = Uuid::new_v4().to_string();
+    let operation = TodoOperation {
+        operation_id: operation_id.clone(),
+        todo_id: todo.id.clone(),
+        kind,
+        payload_json: serde_json::to_string(todo).unwrap_or_default(),
+        base_revision,
+        if_match_etag,
+        write_id: operation_id,
+        depends_on_write_id,
+        attempts: 0,
+        last_error: None,
+    };
+    let _ = main.store.enqueue_todo_operation(&operation);
+}
+
+fn apply_local_todo(main: &mut MainState, todo: Todo, state: SyncState) {
+    let _ = main.store.upsert_todo(&todo, state);
+    if let Some(slot) = main.todos.iter_mut().find(|(item, _)| item.id == todo.id) {
+        *slot = (todo, state);
+    } else {
+        main.todos.insert(0, (todo, state));
+    }
+}
 
 impl AppShell {
     pub(crate) fn select_workspace(&mut self, mode: WorkspaceMode, cx: &mut Context<Self>) {
@@ -77,40 +125,37 @@ impl AppShell {
             return;
         }
         main.todo_create_in_flight = true;
-        let client = main.client.clone();
-        cx.spawn_in(window, async move |this, cx| {
-            let result = smol::unblock(move || client.create_todo_blocking("New task")).await;
-            this.update_in(cx, |this, window, cx| {
-                if let Mode::Main(main) = &mut this.mode {
-                    main.todo_create_in_flight = false;
-                    match result {
-                        Ok(todo) => {
-                            let todo_id = todo.id.clone();
-                            let _ = main.store.upsert_todo(&todo, SyncState::Synced);
-                            main.todos.retain(|(item, _)| item.id != todo.id);
-                            main.todos.insert(0, (todo, SyncState::Synced));
-                            this.open_todo(&todo_id, window, cx);
-                        }
-                        Err(error) => {
-                            main.error = Some(error.to_string().into());
-                            main.status = "Create task failed".into();
-                        }
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        let now = chrono::Utc::now().to_rfc3339();
+        let todo = Todo {
+            id: Uuid::new_v4().to_string(),
+            title: "New task".into(),
+            note: String::new(),
+            status: TodoStatus::Inbox,
+            due_date: None,
+            priority: 0,
+            linked_memo_id: None,
+            is_deleted: false,
+            revision: 0,
+            etag: String::new(),
+            created_at: now.clone(),
+            updated_at: now,
+            completed_at: None,
+            deleted_at: None,
+        };
+        let todo_id = todo.id.clone();
+        queue_todo_operation(main, &todo, TodoOperationKind::Create, None, None);
+        apply_local_todo(main, todo, SyncState::LocalCreated);
+        main.todo_create_in_flight = false;
+        main.status = "Task created locally — syncing".into();
+        self.open_todo(&todo_id, window, cx);
+        self.refresh_remote(window, cx);
+        cx.notify();
     }
 
     pub(crate) fn toggle_todo(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         let Mode::Main(main) = &mut self.mode else {
             return;
         };
-        if main.todo_save_in_flight {
-            return;
-        }
         let Some(todo) = main
             .todos
             .iter()
@@ -119,23 +164,31 @@ impl AppShell {
         else {
             return;
         };
-        let client = main.client.clone();
         let completed = todo.status != TodoStatus::Completed;
-        cx.spawn_in(window, async move |this, cx| {
-            let result =
-                smol::unblock(move || client.set_todo_completed_blocking(&todo, completed)).await;
-            this.update_in(cx, |this, _, cx| {
-                if let (Mode::Main(main), Ok(todo)) = (&mut this.mode, result) {
-                    let _ = main.store.upsert_todo(&todo, SyncState::Synced);
-                    if let Some(slot) = main.todos.iter_mut().find(|(item, _)| item.id == todo.id) {
-                        *slot = (todo, SyncState::Synced);
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        let mut next = todo.clone();
+        next.status = if completed {
+            TodoStatus::Completed
+        } else {
+            TodoStatus::Open
+        };
+        next.completed_at = completed.then(|| chrono::Utc::now().to_rfc3339());
+        next.updated_at = chrono::Utc::now().to_rfc3339();
+        queue_todo_operation(
+            main,
+            &next,
+            TodoOperationKind::Complete,
+            (todo.revision > 0).then_some(todo.revision),
+            (!todo.etag.is_empty()).then_some(todo.etag.clone()),
+        );
+        apply_local_todo(main, next, SyncState::LocalModified);
+        main.status = if completed {
+            "Task completed locally — syncing"
+        } else {
+            "Task restored locally — syncing"
+        }
+        .into();
+        self.refresh_remote(window, cx);
+        cx.notify();
     }
 
     pub(crate) fn toggle_selected_todo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -160,37 +213,28 @@ impl AppShell {
         let Some(todo) = todo else {
             return;
         };
-        let client = match &self.mode {
-            Mode::Main(main) => main.client.clone(),
-            Mode::Setup(_) => return,
-        };
-        cx.spawn_in(window, async move |this, cx| {
-            let result = smol::unblock(move || client.delete_todo_blocking(&todo, false)).await;
-            this.update_in(cx, |this, window, cx| {
-                match result {
-                    Ok(()) => {
-                        if let Mode::Main(main) = &mut this.mode {
-                            main.selected_todo_id = None;
-                            main.todo_title_editor = None;
-                            main.todo_note_editor = None;
-                            main.todo_due_date_editor = None;
-                            main.todo_priority_editor = None;
-                            main.status = "Task moved to trash".into();
-                        }
-                        this.refresh_remote(window, cx);
-                    }
-                    Err(error) => {
-                        if let Mode::Main(main) = &mut this.mode {
-                            main.error = Some(error.to_string().into());
-                            main.status = "Delete task failed".into();
-                        }
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        if let Mode::Main(main) = &mut self.mode {
+            let mut next = todo.clone();
+            next.is_deleted = true;
+            next.deleted_at = Some(chrono::Utc::now().to_rfc3339());
+            next.updated_at = chrono::Utc::now().to_rfc3339();
+            queue_todo_operation(
+                main,
+                &next,
+                TodoOperationKind::Delete,
+                (todo.revision > 0).then_some(todo.revision),
+                (!todo.etag.is_empty()).then_some(todo.etag.clone()),
+            );
+            apply_local_todo(main, next, SyncState::LocalDeleted);
+            main.selected_todo_id = None;
+            main.todo_title_editor = None;
+            main.todo_note_editor = None;
+            main.todo_due_date_editor = None;
+            main.todo_priority_editor = None;
+            main.status = "Task moved to trash locally — syncing".into();
+        }
+        self.refresh_remote(window, cx);
+        cx.notify();
     }
 
     pub(crate) fn restore_selected_todo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -205,38 +249,25 @@ impl AppShell {
         let Some(todo) = todo else {
             return;
         };
-        let client = match &self.mode {
-            Mode::Main(main) => main.client.clone(),
-            Mode::Setup(_) => return,
-        };
-        cx.spawn_in(window, async move |this, cx| {
-            let result = smol::unblock(move || client.restore_todo_blocking(&todo)).await;
-            this.update_in(cx, |this, window, cx| {
-                match result {
-                    Ok(todo) => {
-                        if let Mode::Main(main) = &mut this.mode {
-                            if let Some(slot) =
-                                main.todos.iter_mut().find(|(item, _)| item.id == todo.id)
-                            {
-                                *slot = (todo, SyncState::Synced);
-                            }
-                            main.todo_filter = TodoFilter::Inbox;
-                            main.status = "Task restored".into();
-                        }
-                        this.refresh_remote(window, cx);
-                    }
-                    Err(error) => {
-                        if let Mode::Main(main) = &mut this.mode {
-                            main.error = Some(error.to_string().into());
-                            main.status = "Restore task failed".into();
-                        }
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        if let Mode::Main(main) = &mut self.mode {
+            let mut next = todo.clone();
+            next.is_deleted = false;
+            next.deleted_at = None;
+            next.status = TodoStatus::Open;
+            next.updated_at = chrono::Utc::now().to_rfc3339();
+            queue_todo_operation(
+                main,
+                &next,
+                TodoOperationKind::Restore,
+                (todo.revision > 0).then_some(todo.revision),
+                (!todo.etag.is_empty()).then_some(todo.etag.clone()),
+            );
+            apply_local_todo(main, next, SyncState::LocalModified);
+            main.todo_filter = TodoFilter::Inbox;
+            main.status = "Task restored locally — syncing".into();
+        }
+        self.refresh_remote(window, cx);
+        cx.notify();
     }
 
     pub(crate) fn permanently_delete_selected_todo(
@@ -364,33 +395,33 @@ impl AppShell {
                 todo.priority = priority.clamp(0, 3);
             }
         }
-        let client = main.client.clone();
-        main.todo_save_in_flight = true;
-        cx.spawn_in(window, async move |this, cx| {
-            let result = smol::unblock(move || client.update_todo_blocking(&todo)).await;
-            this.update_in(cx, |this, _, cx| {
-                if let Mode::Main(main) = &mut this.mode {
-                    main.todo_save_in_flight = false;
-                    match result {
-                        Ok(todo) => {
-                            if let Some(slot) =
-                                main.todos.iter_mut().find(|(item, _)| item.id == todo.id)
-                            {
-                                *slot = (todo, SyncState::Synced);
-                            }
-                            main.status = "Task saved".into();
-                        }
-                        Err(error) => {
-                            main.error = Some(error.to_string().into());
-                            main.status = "Save task failed".into();
-                        }
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        let original_revision = todo.revision;
+        let original_etag = todo.etag.clone();
+        let has_pending_create = main
+            .store
+            .pending_todo_operations()
+            .ok()
+            .is_some_and(|ops| {
+                ops.iter()
+                    .any(|op| op.todo_id == todo.id && op.kind == TodoOperationKind::Create)
+            });
+        let kind = if original_revision == 0 && !has_pending_create {
+            TodoOperationKind::Create
+        } else {
+            TodoOperationKind::Update
+        };
+        queue_todo_operation(
+            main,
+            &todo,
+            kind,
+            (original_revision > 0).then_some(original_revision),
+            (!original_etag.is_empty()).then_some(original_etag),
+        );
+        main.todo_save_in_flight = false;
+        apply_local_todo(main, todo, SyncState::LocalModified);
+        main.status = "Task saved locally — syncing".into();
+        self.refresh_remote(window, cx);
+        cx.notify();
     }
 
     pub(crate) fn set_todo_due_date(
@@ -497,6 +528,7 @@ impl AppShell {
             search_results: None,
             available_tags: Vec::new(),
             preview: None,
+            preview_scroll_handle: gpui::ScrollHandle::new(),
             memo_display_mode,
             status: "Loading...".into(),
             error: None,
@@ -628,8 +660,18 @@ impl AppShell {
         main.error = None;
         let client = main.client.clone();
         let store = main.store.clone();
+        let engine = SyncEngine::new(
+            client.clone(),
+            store.clone(),
+            main.instance.device_id.clone(),
+        );
         cx.spawn_in(window, async move |this, cx| {
             let result = smol::unblock(move || {
+                // Replay the durable Todo outbox and pull the cursor before the
+                // regular REST refresh. REST remains the authoritative full
+                // snapshot for the list, while the sync journal carries edits
+                // made on other devices and conflict state.
+                let _sync_report = engine.sync_todos();
                 let notebooks = client.list_notebooks_blocking()?;
                 let tags = client.list_tags_blocking().unwrap_or_default();
                 let active = client.list_memos_blocking(None, false, None, 200)?;
@@ -654,13 +696,38 @@ impl AppShell {
                         main.notebooks = notebooks;
                         main.available_tags = tags;
                         main.memos = memos.into_iter().map(|s| (s, SyncState::Synced)).collect();
-                        for todo in &todos {
-                            let _ = main.store.upsert_todo(todo, SyncState::Synced);
-                        }
-                        main.todos = todos
+                        let local_todos = store.list_todos().unwrap_or_default();
+                        let mut local_by_id = local_todos
                             .into_iter()
-                            .map(|todo| (todo, SyncState::Synced))
-                            .collect();
+                            .map(|(todo, state)| (todo.id.clone(), (todo, state)))
+                            .collect::<std::collections::HashMap<_, _>>();
+                        let mut merged_todos = Vec::with_capacity(todos.len() + local_by_id.len());
+                        for remote in todos {
+                            let id = remote.id.clone();
+                            if let Some((local, state)) = local_by_id.remove(&id) {
+                                if matches!(
+                                    state,
+                                    SyncState::LocalModified
+                                        | SyncState::LocalCreated
+                                        | SyncState::LocalDeleted
+                                        | SyncState::Failed
+                                        | SyncState::Conflict
+                                ) {
+                                    merged_todos.push((local, state));
+                                } else {
+                                    let _ = main.store.upsert_todo(&remote, SyncState::Synced);
+                                    merged_todos.push((remote, SyncState::Synced));
+                                }
+                            } else {
+                                let _ = main.store.upsert_todo(&remote, SyncState::Synced);
+                                merged_todos.push((remote, SyncState::Synced));
+                            }
+                        }
+                        // Keep offline-created and locally deleted records in
+                        // memory even when the server snapshot does not have
+                        // them yet (or hides them from the active endpoint).
+                        merged_todos.extend(local_by_id.into_values());
+                        main.todos = merged_todos;
                         if let Ok(local) = store.list_summaries() {
                             for (summary, state) in local {
                                 if matches!(
@@ -748,7 +815,8 @@ impl AppShell {
         let Mode::Main(main) = &self.mode else {
             return Vec::new();
         };
-        main.memos
+        let mut memos = main
+            .memos
             .iter()
             .filter(|(m, _)| match &main.filter {
                 NavFilter::All => !m.is_deleted,
@@ -763,7 +831,14 @@ impl AppShell {
                 }
             })
             .cloned()
-            .collect()
+            .collect::<Vec<_>>();
+        memos.sort_by(|(left, _), (right, _)| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        memos
     }
 
     pub(crate) fn connect_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -957,6 +1032,16 @@ impl AppShell {
                                     this.schedule_preview_update(false, cx);
                                 }
                             }));
+                        main.preview_scroll_handle = gpui::ScrollHandle::new();
+                        main._preview_sub = Some(cx.subscribe_in(
+                            &editor,
+                            window,
+                            |this, editor, event: &editor::EditorEvent, window, cx| {
+                                if matches!(event, editor::EditorEvent::SelectionsChanged { .. }) {
+                                    this.sync_preview_to_editor_selection(editor, window, cx);
+                                }
+                            },
+                        ));
 
                         let editor_weak = editor.downgrade();
                         let languages2 = languages.clone();
@@ -997,7 +1082,6 @@ impl AppShell {
                         main.editor = Some(editor.clone());
                         main.title_editor = Some(title_editor);
                         main.preview = Some(preview);
-                        main._preview_sub = None;
                         if let Some(bar) = main.buffer_search_bar.clone() {
                             bar.update(cx, |bar, cx| {
                                 bar.set_active_pane_item(Some(&editor), window, cx);
@@ -1109,11 +1193,67 @@ impl AppShell {
         }
     }
 
+    /// Keep the Live/Read Markdown projection scrolled to the editor cursor.
+    /// Mirrors `markdown_preview`'s selection-driven sync: only autoscroll when
+    /// the source editor is focused so manual preview scrolling isn't stolen.
+    fn sync_preview_to_editor_selection(
+        &mut self,
+        editor: &Entity<Editor>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Mode::Main(main) = &self.mode else {
+            return;
+        };
+        if !matches!(
+            main.memo_display_mode,
+            MemoDisplayMode::Live | MemoDisplayMode::Read
+        ) {
+            return;
+        }
+        let Some(preview) = main.preview.clone() else {
+            return;
+        };
+        let (source_index, editor_focused) = editor.update(cx, |editor, cx| {
+            let index = Self::editor_source_index(editor, cx);
+            let focused = editor.focus_handle(cx).is_focused(window);
+            (index, focused)
+        });
+        let Some(source_index) = source_index else {
+            return;
+        };
+        preview.update(cx, |markdown, cx| {
+            markdown.set_active_root_for_source_index(Some(source_index), cx);
+            if editor_focused {
+                markdown.request_autoscroll_to_source_index(source_index, cx);
+            }
+        });
+    }
+
+    fn editor_source_index(editor: &Editor, cx: &mut gpui::App) -> Option<usize> {
+        let display_snapshot = editor.display_snapshot(cx);
+        let source_offset = editor
+            .selections
+            .last::<editor::MultiBufferOffset>(&display_snapshot)
+            .range()
+            .start;
+        let buffer = editor.buffer().read(cx).as_singleton()?;
+        let buffer_id = buffer.read(cx).remote_id();
+        let (buffer_snapshot, buffer_offset) = display_snapshot
+            .buffer_snapshot()
+            .point_to_buffer_offset(source_offset)?;
+        if buffer_snapshot.remote_id() == buffer_id {
+            Some(buffer_offset.0)
+        } else {
+            None
+        }
+    }
+
     /// Update the rendered projection only when it is actually visible. The
     /// Markdown component parses whole documents, so coalescing keystrokes here
     /// keeps the Vim/editor input path independent from preview cost.
     fn schedule_preview_update(&mut self, immediate: bool, cx: &mut Context<Self>) {
-        let (generation, preview) = {
+        let (generation, preview, editor) = {
             let Mode::Main(main) = &mut self.mode else {
                 return;
             };
@@ -1124,7 +1264,7 @@ impl AppShell {
                 return;
             };
             main.preview_generation += 1;
-            (main.preview_generation, preview)
+            (main.preview_generation, preview, main.editor.clone())
         };
         cx.spawn(async move |this, cx| {
             if !immediate {
@@ -1143,8 +1283,26 @@ impl AppShell {
                 .ok()
                 .flatten();
             if let Some(source) = source {
+                let source_index = editor.as_ref().and_then(|editor| {
+                    editor.update(cx, |editor, cx| Self::editor_source_index(editor, cx))
+                });
+                let still_previewing = this
+                    .read_with(cx, |this, _| match &this.mode {
+                        Mode::Main(main) => matches!(
+                            main.memo_display_mode,
+                            MemoDisplayMode::Live | MemoDisplayMode::Read
+                        ),
+                        Mode::Setup(_) => false,
+                    })
+                    .unwrap_or(false);
                 preview.update(cx, |markdown, cx| {
                     markdown.replace(SharedString::from(source), cx);
+                    if still_previewing {
+                        if let Some(source_index) = source_index {
+                            markdown.set_active_root_for_source_index(Some(source_index), cx);
+                            markdown.request_autoscroll_to_source_index(source_index, cx);
+                        }
+                    }
                 });
             }
         })
@@ -1325,6 +1483,7 @@ impl AppShell {
                 summary.etag = ack.etag.clone();
                 summary.revision = ack.revision;
                 summary.content_hash = ack.content_hash.clone();
+                summary.updated_at = ack.saved_at.clone();
                 summary.excerpt = panda_core::derive_excerpt(markdown, 240);
                 if let Some(active) = main.active.as_ref().filter(|a| a.id == id) {
                     summary.title = active.title.clone();
@@ -1463,6 +1622,100 @@ impl AppShell {
         .detach();
     }
 
+    pub(crate) fn create_journal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Mode::Main(main) = &mut self.mode else {
+            return;
+        };
+        let client = main.client.clone();
+        let root = main
+            .store
+            .get_meta("journal_folder")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "Journal".into());
+        let mut folders = root
+            .split(['/', '\\'])
+            .map(str::trim)
+            .filter(|segment| !segment.is_empty() && *segment != "." && *segment != "..")
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        if folders.is_empty() {
+            main.error = Some("Set a Journal folder in Settings first".into());
+            main.status = "Journal folder is required".into();
+            cx.notify();
+            return;
+        }
+        let now = chrono::Local::now();
+        let title = now.format("%Y%m%d").to_string();
+        folders.push(now.format("%Y").to_string());
+        folders.push(now.format("%m").to_string());
+        main.status = "Preparing journal...".into();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = smol::unblock(move || {
+                let mut notebooks = client.list_notebooks_blocking()?;
+                let mut parent_id = None;
+                for name in folders {
+                    let notebook = notebooks
+                        .iter()
+                        .find(|notebook| {
+                            !notebook.is_deleted
+                                && notebook.name == name
+                                && notebook.parent_id == parent_id
+                        })
+                        .cloned()
+                        .map(Ok)
+                        .unwrap_or_else(|| {
+                            client.create_notebook_blocking(&name, parent_id.as_deref(), None)
+                        })?;
+                    parent_id = Some(notebook.id.clone());
+                    if !notebooks.iter().any(|existing| existing.id == notebook.id) {
+                        notebooks.push(notebook);
+                    }
+                }
+                let notebook_id = parent_id.expect("journal path always has a folder");
+                let existing = client
+                    .list_memos_blocking(Some(&notebook_id), false, Some(&title), 200)?
+                    .into_iter()
+                    .find(|memo| memo.title.as_deref() == Some(title.as_str()));
+                Ok::<_, panda_api::ApiError>(match existing {
+                    Some(memo) => (memo.id, false),
+                    None => (
+                        client
+                            .create_memo_blocking(&notebook_id, Some(&title), "")?
+                            .id,
+                        true,
+                    ),
+                })
+            })
+            .await;
+            this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok((id, created)) => {
+                        if let Mode::Main(main) = &mut this.mode {
+                            main.status = if created {
+                                "Journal created".into()
+                            } else {
+                                "Journal opened".into()
+                            };
+                            main.error = None;
+                        }
+                        this.refresh_remote(window, cx);
+                        this.open_memo(&id, window, cx);
+                    }
+                    Err(error) => {
+                        if let Mode::Main(main) = &mut this.mode {
+                            main.error = Some(error.to_string().into());
+                            main.status = "Journal creation failed".into();
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     pub(crate) fn delete_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Mode::Main(main) = &mut self.mode else {
             return;
@@ -1524,7 +1777,10 @@ impl AppShell {
     }
 
     pub(crate) fn open_settings_window(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        crate::settings_window::SettingsWindow::open(cx);
+        let Mode::Main(main) = &self.mode else {
+            return;
+        };
+        crate::settings_window::SettingsWindow::open(main.store.clone(), cx);
     }
 
     pub(crate) fn toggle_preview(&mut self, cx: &mut Context<Self>) {
@@ -1693,6 +1949,77 @@ impl AppShell {
                         if let Mode::Main(main) = &mut this.mode {
                             main.error = Some(e.to_string().into());
                             main.status = "Move failed".into();
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn reorder_notebook(
+        &mut self,
+        dragged_id: String,
+        dragged_parent_id: Option<String>,
+        target_id: String,
+        target_parent_id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if dragged_id == target_id {
+            return;
+        }
+        if dragged_parent_id != target_parent_id {
+            if let Mode::Main(main) = &mut self.mode {
+                main.status = "Folders can only be reordered within the same level".into();
+            }
+            cx.notify();
+            return;
+        }
+        let Mode::Main(main) = &mut self.mode else {
+            return;
+        };
+        let mut siblings = main
+            .notebooks
+            .iter()
+            .filter(|notebook| !notebook.is_deleted && notebook.parent_id == target_parent_id)
+            .map(|notebook| notebook.id.clone())
+            .collect::<Vec<_>>();
+        siblings.sort_by_key(|id| {
+            main.notebooks
+                .iter()
+                .find(|notebook| &notebook.id == id)
+                .map(|notebook| notebook.sort_order)
+                .unwrap_or_default()
+        });
+        let Some(from) = siblings.iter().position(|id| id == &dragged_id) else {
+            return;
+        };
+        let Some(to) = siblings.iter().position(|id| id == &target_id) else {
+            return;
+        };
+        let moved = siblings.remove(from);
+        siblings.insert(to, moved);
+        let client = main.client.clone();
+        main.status = "Reordering folders...".into();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = smol::unblock(move || {
+                client.reorder_notebooks_blocking(target_parent_id.as_deref(), &siblings)
+            })
+            .await;
+            this.update_in(cx, |this, _window, cx| {
+                if let Mode::Main(main) = &mut this.mode {
+                    match result {
+                        Ok(notebooks) => {
+                            main.notebooks = notebooks;
+                            main.status = "Folders reordered".into();
+                            main.error = None;
+                        }
+                        Err(error) => {
+                            main.status = "Folder reorder failed".into();
+                            main.error = Some(error.to_string().into());
                         }
                     }
                 }

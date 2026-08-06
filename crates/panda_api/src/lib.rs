@@ -158,9 +158,7 @@ impl ApiClient {
         let err: WireApiError = serde_json::from_slice(&bytes).unwrap_or(WireApiError {
             code: status.as_str().to_string(),
             message: String::from_utf8_lossy(&bytes).into_owned(),
-            retryable: false,
             current_etag: None,
-            details_json: None,
         });
         Err(ApiError::Http {
             status: status.as_u16(),
@@ -199,9 +197,7 @@ impl ApiClient {
             let err: WireApiError = serde_json::from_slice(&bytes).unwrap_or(WireApiError {
                 code: "login_failed".into(),
                 message: String::from_utf8_lossy(&bytes).into_owned(),
-                retryable: false,
                 current_etag: None,
-                details_json: None,
             });
             return Err(ApiError::Http {
                 status: status.as_u16(),
@@ -522,9 +518,7 @@ impl ApiClient {
         let err: WireApiError = serde_json::from_slice(&bytes).unwrap_or(WireApiError {
             code: "delete_failed".into(),
             message: String::from_utf8_lossy(&bytes).into_owned(),
-            retryable: false,
             current_etag: None,
-            details_json: None,
         });
         Err(ApiError::Http {
             status: status.as_u16(),
@@ -587,6 +581,26 @@ impl ApiClient {
         .await
     }
 
+    pub async fn reorder_notebooks(
+        &self,
+        parent_id: Option<&str>,
+        notebook_ids: &[String],
+    ) -> Result<Vec<Notebook>, ApiError> {
+        let mut body = serde_json::json!({ "notebook_ids": notebook_ids });
+        if let Some(parent_id) = parent_id {
+            body["parent_id"] = Value::String(parent_id.to_string());
+        }
+        let resp: NotebookListResponse = self
+            .request_json(
+                reqwest::Method::POST,
+                "/notebooks/reorder",
+                &self.token,
+                Some(&body),
+            )
+            .await?;
+        Ok(resp.items)
+    }
+
     pub async fn delete_notebook(&self, id: &str) -> Result<(), ApiError> {
         let resp = self
             .http
@@ -604,9 +618,7 @@ impl ApiClient {
         let err: WireApiError = serde_json::from_slice(&bytes).unwrap_or(WireApiError {
             code: "delete_notebook_failed".into(),
             message: String::from_utf8_lossy(&bytes).into_owned(),
-            retryable: false,
             current_etag: None,
-            details_json: None,
         });
         Err(ApiError::Http {
             status: status.as_u16(),
@@ -729,6 +741,14 @@ impl ApiClient {
         runtime().block_on(self.rename_notebook(id, name))
     }
 
+    pub fn reorder_notebooks_blocking(
+        &self,
+        parent_id: Option<&str>,
+        notebook_ids: &[String],
+    ) -> Result<Vec<Notebook>, ApiError> {
+        runtime().block_on(self.reorder_notebooks(parent_id, notebook_ids))
+    }
+
     pub fn delete_notebook_blocking(&self, id: &str) -> Result<(), ApiError> {
         runtime().block_on(self.delete_notebook(id))
     }
@@ -754,6 +774,63 @@ impl ApiClient {
     pub fn list_tags_blocking(&self) -> Result<Vec<String>, ApiError> {
         runtime().block_on(self.list_tags())
     }
+
+    /// Pull the append-only server journal. The cursor is advanced only after
+    /// the caller has durably applied the returned changes.
+    pub async fn sync_pull(
+        &self,
+        cursor: u64,
+        limit: i64,
+        device_id: &str,
+    ) -> Result<SyncPullResponse, ApiError> {
+        self.request_json(
+            reqwest::Method::GET,
+            &format!(
+                "/sync/pull?cursor={cursor}&limit={}&device_id={}",
+                limit.clamp(1, 500),
+                urlencoding_lite(device_id),
+            ),
+            &self.token,
+            None,
+        )
+        .await
+    }
+
+    pub async fn sync_push(
+        &self,
+        device_id: &str,
+        items: Vec<SyncPushItem>,
+    ) -> Result<SyncPushResponse, ApiError> {
+        let body = serde_json::json!({
+            "protocol_version": PROTOCOL_VERSION,
+            "device_id": device_id,
+            "items": items,
+        });
+        self.request_json(
+            reqwest::Method::POST,
+            "/sync/push",
+            &self.token,
+            Some(&body),
+        )
+        .await
+    }
+
+    pub fn sync_pull_blocking(
+        &self,
+        cursor: u64,
+        limit: i64,
+        device_id: &str,
+    ) -> Result<SyncPullResponse, ApiError> {
+        runtime().block_on(self.sync_pull(cursor, limit, device_id))
+    }
+
+    pub fn sync_push_blocking(
+        &self,
+        device_id: &str,
+        items: Vec<SyncPushItem>,
+    ) -> Result<SyncPushResponse, ApiError> {
+        runtime().block_on(self.sync_push(device_id, items))
+    }
 }
 
 fn urlencoding_lite(s: &str) -> String {
@@ -769,10 +846,55 @@ fn urlencoding_lite(s: &str) -> String {
 struct WireApiError {
     code: String,
     message: String,
-    #[serde(default)]
-    retryable: bool,
     current_etag: Option<String>,
-    details_json: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SyncPullResponse {
+    pub protocol_version: u32,
+    pub sync_epoch: u64,
+    pub cursor: u64,
+    pub changes: Vec<SyncChange>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SyncChange {
+    pub id: u64,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub operation: String,
+    pub payload_kind: String,
+    pub payload_json: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncTodoPush {
+    pub todo: Todo,
+    pub base_revision: Option<u64>,
+    pub if_match_etag: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncPushItem {
+    pub client_op_id: String,
+    pub op: String,
+    pub todo: Option<SyncTodoPush>,
+    pub depends_on_client_op_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SyncPushResponse {
+    pub results: Vec<SyncPushItemResult>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SyncPushItemResult {
+    pub client_op_id: String,
+    pub ok: bool,
+    pub error_code: Option<String>,
+    pub todo: Option<Todo>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -805,8 +927,6 @@ struct BatchMoveResponse {
 #[derive(Debug, Deserialize)]
 struct MemoListResponse {
     items: Vec<MemoSummary>,
-    #[serde(default)]
-    next_cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -840,9 +960,6 @@ struct MemoDetailWire {
 #[derive(Debug, Deserialize)]
 struct MemoContentWire {
     body: Option<MemoContentBodyWire>,
-    content_hash: String,
-    #[serde(default)]
-    byte_size: u64,
 }
 
 #[derive(Debug, Deserialize)]

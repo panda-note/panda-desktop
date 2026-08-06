@@ -10,6 +10,8 @@ description = "Panda Note sync queue, conflict handling, and incremental sync."
 workspace = true
 
 [dependencies]
+anyhow.workspace = true
 panda_api.workspace = true
 panda_core.workspace = true
 panda_store.workspace = true
+serde_json.workspace = true

@@ -68,10 +68,23 @@ impl LocalStore {
             CREATE TABLE IF NOT EXISTS todo_operations (
                 operation_id TEXT PRIMARY KEY, todo_id TEXT NOT NULL, kind TEXT NOT NULL,
                 payload_json TEXT NOT NULL, base_revision INTEGER, if_match_etag TEXT,
+                write_id TEXT NOT NULL DEFAULT '', depends_on_write_id TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             "#,
         )?;
+        // Databases created by the first Todo implementation do not have the
+        // journal metadata yet. SQLite has no ADD COLUMN IF NOT EXISTS, so
+        // tolerate the duplicate-column error for each compatibility ALTER.
+        for statement in [
+            "ALTER TABLE todo_operations ADD COLUMN write_id TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE todo_operations ADD COLUMN depends_on_write_id TEXT",
+            "ALTER TABLE todo_operations ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE todo_operations ADD COLUMN last_error TEXT",
+        ] {
+            let _ = conn.execute(statement, []);
+        }
         Ok(())
     }
 
@@ -301,13 +314,13 @@ impl LocalStore {
     }
 
     pub fn enqueue_todo_operation(&self, operation: &TodoOperation) -> Result<()> {
-        self.conn.lock().execute("INSERT OR REPLACE INTO todo_operations(operation_id,todo_id,kind,payload_json,base_revision,if_match_etag) VALUES(?1,?2,?3,?4,?5,?6)",params![operation.operation_id,operation.todo_id,serde_json::to_string(&operation.kind)?,operation.payload_json,operation.base_revision.map(|v|v as i64),operation.if_match_etag])?;
+        self.conn.lock().execute("INSERT OR REPLACE INTO todo_operations(operation_id,todo_id,kind,payload_json,base_revision,if_match_etag,write_id,depends_on_write_id,attempts,last_error) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![operation.operation_id,operation.todo_id,serde_json::to_string(&operation.kind)?,operation.payload_json,operation.base_revision.map(|v|v as i64),operation.if_match_etag,operation.write_id,operation.depends_on_write_id,operation.attempts as i64,operation.last_error])?;
         Ok(())
     }
 
     pub fn pending_todo_operations(&self) -> Result<Vec<TodoOperation>> {
         let conn = self.conn.lock();
-        let mut stmt=conn.prepare("SELECT operation_id,todo_id,kind,payload_json,base_revision,if_match_etag FROM todo_operations ORDER BY created_at, operation_id")?;
+        let mut stmt=conn.prepare("SELECT operation_id,todo_id,kind,payload_json,base_revision,if_match_etag,write_id,depends_on_write_id,attempts,last_error FROM todo_operations ORDER BY created_at, operation_id")?;
         let rows = stmt.query_map([], |r| {
             let kind: String = r.get(2)?;
             Ok(TodoOperation {
@@ -317,6 +330,10 @@ impl LocalStore {
                 payload_json: r.get(3)?,
                 base_revision: r.get::<_, Option<i64>>(4)?.map(|v| v as u64),
                 if_match_etag: r.get(5)?,
+                write_id: r.get::<_, String>(6)?.trim().to_string(),
+                depends_on_write_id: r.get(7)?,
+                attempts: r.get::<_, i64>(8)?.max(0) as u32,
+                last_error: r.get(9)?,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -327,6 +344,22 @@ impl LocalStore {
         self.conn.lock().execute(
             "DELETE FROM todo_operations WHERE operation_id=?1",
             params![operation_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_todo_operation_failure(&self, operation_id: &str, error: &str) -> Result<()> {
+        self.conn.lock().execute(
+            "UPDATE todo_operations SET attempts=attempts+1,last_error=?2 WHERE operation_id=?1",
+            params![operation_id, error],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_todo_sync_state(&self, id: &str, state: SyncState) -> Result<()> {
+        self.conn.lock().execute(
+            "UPDATE todo_cache SET sync_state=?2 WHERE id=?1",
+            params![id, state.as_str()],
         )?;
         Ok(())
     }

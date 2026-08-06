@@ -196,6 +196,7 @@ pub enum TodoOperationKind {
     Create,
     Update,
     Complete,
+    Restore,
     Delete,
 }
 
@@ -207,6 +208,12 @@ pub struct TodoOperation {
     pub payload_json: String,
     pub base_revision: Option<u64>,
     pub if_match_etag: Option<String>,
+    /// Stable id sent to `/sync/push`; retries with the same id are idempotent.
+    pub write_id: String,
+    /// Preserve ordering when several edits to one Todo are queued together.
+    pub depends_on_write_id: Option<String>,
+    pub attempts: u32,
+    pub last_error: Option<String>,
 }
 
 impl Default for NavFilter {
