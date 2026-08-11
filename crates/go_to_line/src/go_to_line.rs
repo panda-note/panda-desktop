@@ -221,7 +221,7 @@ impl GoToLine {
         cx: &mut Context<Self>,
     ) {
         match event {
-            editor::EditorEvent::Blurred => {
+            editor::EditorEvent::Blurred if window.is_window_active() => {
                 // Defer dismiss one frame so mount/focus races (e.g. AppShell overlay
                 // focusing after the first paint) do not immediately tear the modal down.
                 cx.defer_in(window, |this, window, cx| {

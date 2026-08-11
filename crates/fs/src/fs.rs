@@ -1253,7 +1253,7 @@ impl Fs for RealFs {
         if !output.status.success() {
             anyhow::bail!(
                 "git clone failed: {}",
-                String::from_utf8_lossy(&output.stderr)
+                String::from_utf8_lossy(&output.stderr).trim_end()
             );
         }
 
@@ -1362,7 +1362,8 @@ impl Fs for RealFs {
         let trashed_entry = self
             .trash
             .lock()
-            .remove(trash_id)
+            .get(trash_id)
+            .cloned()
             .ok_or(TrashRestoreError::AlreadyRestored)?;
 
         let restored_item_path = trashed_entry.original_parent.join(&trashed_entry.name);
@@ -1375,7 +1376,9 @@ impl Fs for RealFs {
                 tx.send(res)
             })
             .expect("The OS can spawn a threads");
+
         rx.await.expect("Restore all never panics")?;
+        self.trash.lock().remove(trash_id);
         Ok(restored_item_path)
     }
 }
@@ -2607,7 +2610,7 @@ impl FakeFs {
         state
             .event_txs
             .iter()
-            .filter_map(|(path, tx)| Some(path.clone()).filter(|_| !tx.is_closed()))
+            .filter_map(|(path, tx)| (!tx.is_closed()).then_some(path.clone()))
             .collect()
     }
 
@@ -3346,7 +3349,7 @@ impl Fs for FakeFs {
     async fn restore(&self, trash_id: TrashId) -> Result<PathBuf, TrashRestoreError> {
         let mut state = self.state.lock();
 
-        let Some((trashed_entry, fake_entry)) = state.trash.lock().remove(trash_id) else {
+        let Some((trashed_entry, fake_entry)) = state.trash.lock().get(trash_id).cloned() else {
             return Err(TrashRestoreError::AlreadyRestored);
         };
 
@@ -3366,6 +3369,7 @@ impl Fs for FakeFs {
 
         match result {
             Ok(_) => {
+                state.trash.lock().remove(trash_id);
                 state.emit_event([(path.clone(), Some(PathEventKind::Created))]);
                 Ok(path)
             }

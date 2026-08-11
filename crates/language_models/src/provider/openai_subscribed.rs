@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use credentials_provider::CredentialsProvider;
 use futures::future::Shared;
 use gpui::{App, Context, Entity, SharedString, Task, Window};
@@ -48,7 +48,7 @@ impl LanguageModelProvider for OpenAiSubscribedProvider {
     }
 
     fn icon(&self) -> IconOrSvg {
-        IconOrSvg::Icon(IconName::AiOpenAi)
+        IconOrSvg::Icon(IconName::AiOpenAiGptSub)
     }
 
     fn default_model(&self, cx: &App) -> Option<Arc<dyn LanguageModel>> {
@@ -70,6 +70,14 @@ impl LanguageModelProvider for OpenAiSubscribedProvider {
             .collect()
     }
 
+    fn recommended_models(&self, cx: &App) -> Vec<Arc<dyn LanguageModel>> {
+        vec![create_language_model(
+            ChatGptModel::Gpt56Sol,
+            &self.state,
+            cx,
+        )]
+    }
+
     fn is_authenticated(&self, cx: &App) -> bool {
         self.state.read(cx).is_authenticated()
     }
@@ -89,17 +97,11 @@ impl LanguageModelProvider for OpenAiSubscribedProvider {
                 if is_auth {
                     Ok(())
                 } else {
-                    Err(anyhow!(
-                        "Sign in with your ChatGPT Plus or Pro subscription to use this provider."
-                    )
-                    .into())
+                    Err(AuthenticateError::CredentialsNotFound)
                 }
             })
         } else {
-            Task::ready(Err(anyhow!(
-                "Sign in with your ChatGPT Plus or Pro subscription to use this provider."
-            )
-            .into()))
+            Task::ready(Err(AuthenticateError::CredentialsNotFound))
         }
     }
 
