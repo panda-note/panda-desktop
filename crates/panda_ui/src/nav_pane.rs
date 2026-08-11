@@ -9,7 +9,9 @@ use ui::prelude::*;
 use ui::{ContextMenu, Divider, DividerColor, ListItem, ListItemSpacing};
 
 use crate::shell::AppShell;
-use crate::state::{DraggedMemo, Mode, WorkspaceMode};
+use crate::state::{
+    DraggedMemo, DraggedNotebook, Mode, NotebookDropIndicator, NotebookInsertSide, WorkspaceMode,
+};
 
 impl AppShell {
     pub(crate) fn render_nav_pane(
@@ -17,15 +19,21 @@ impl AppShell {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if matches!(&self.mode, Mode::Main(main) if main.workspace_mode == WorkspaceMode::Todos) {
+            return self.render_todo_nav(cx);
+        }
+        if let Mode::Main(main) = &mut self.mode {
+            if !cx.has_active_drag() {
+                main.notebook_drop_indicator = None;
+            }
+        }
         let Mode::Main(main) = &self.mode else {
             return div().into_any_element();
         };
-        if main.workspace_mode == WorkspaceMode::Todos {
-            return self.render_todo_nav(cx);
-        }
         let notebooks = main.notebooks.clone();
         let filter = main.filter.clone();
         let collapsed = main.collapsed_notebooks.clone();
+        let drop_indicator = main.notebook_drop_indicator.clone();
         let nav_width = main.nav_width;
         let available_tags = main.available_tags.clone();
 
@@ -39,6 +47,13 @@ impl AppShell {
             .gap_0p5()
             .id("nav-pane")
             .overflow_y_scroll()
+            // Capture-phase drag_move fires for every listener; clear first so only
+            // the row that actually contains the pointer can set a new indicator.
+            .on_drag_move(cx.listener(
+                |this, _: &gpui::DragMoveEvent<DraggedNotebook>, _, cx| {
+                    this.clear_notebook_drop_indicator(cx);
+                },
+            ))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
@@ -148,14 +163,105 @@ impl AppShell {
                 None
             };
             let drop_id = id.clone();
+            let indicator_id = id.clone();
+            let memo_drop_id = id.clone();
+            let drop_parent_id = nb.parent_id.clone();
+            let select_id = id.clone();
+            let drag = DraggedNotebook {
+                id: id.clone(),
+                parent_id: nb.parent_id.clone(),
+                name: name.clone().into(),
+                anchor: None,
+            };
             let menu_id = id.clone();
+            let insert_side = drop_indicator.as_ref().and_then(|indicator| {
+                (indicator.target_id == id).then_some(indicator.side)
+            });
+            // Single interactive row owns drag + both drop kinds. Nesting a memo-only
+            // drop target under the notebook drag handle prevented reliable DnD hit
+            // testing (same pattern as memo list: drag on the outer stateful div).
             nav = nav.child(
                 div()
                     .id(SharedString::from(format!("nb-drop-{id}")))
                     .w_full()
-                    .can_drop(|drag: &dyn std::any::Any, _, _| drag.is::<DraggedMemo>())
+                    .cursor_grab()
+                    // Keep the folder insertion marker as light as the pane
+                    // dividers; a one-pixel edge is enough to show the drop
+                    // position without making the whole row look selected.
+                    .border_color(cx.theme().colors().drop_target_border)
+                    .border_0()
+                    .when(insert_side == Some(NotebookInsertSide::Before), |row| {
+                        row.border_t_1()
+                    })
+                    .when(insert_side == Some(NotebookInsertSide::After), |row| {
+                        row.border_b_1()
+                    })
+                    .on_drag(drag, |drag, position, _, cx| {
+                        cx.new(|_| {
+                            let mut d = drag.clone();
+                            d.anchor = Some(position);
+                            d
+                        })
+                    })
+                    .can_drop(|drag: &dyn std::any::Any, _, _| {
+                        drag.is::<DraggedNotebook>() || drag.is::<DraggedMemo>()
+                    })
+                    // Memo drops nest into the folder — keep the filled target.
+                    .drag_over::<DraggedMemo>(|style, _, _, cx| {
+                        style.bg(cx.theme().colors().drop_target_background)
+                    })
+                    .on_drag_move(cx.listener(
+                        move |this, event: &gpui::DragMoveEvent<DraggedNotebook>, _, cx| {
+                            // on_drag_move runs for every registered listener during
+                            // capture — only the hovered row may update the indicator.
+                            if !event.bounds.contains(&event.event.position) {
+                                return;
+                            }
+                            let relative_y = event.event.position.y - event.bounds.origin.y;
+                            let side = if relative_y < event.bounds.size.height * 0.5 {
+                                NotebookInsertSide::Before
+                            } else {
+                                NotebookInsertSide::After
+                            };
+                            this.set_notebook_drop_indicator(
+                                Some(NotebookDropIndicator {
+                                    target_id: indicator_id.clone(),
+                                    side,
+                                }),
+                                cx,
+                            );
+                        },
+                    ))
+                    .on_drop(cx.listener(
+                        move |this, drag: &DraggedNotebook, window, cx| {
+                            let side = match &this.mode {
+                                Mode::Main(main) => main
+                                    .notebook_drop_indicator
+                                    .as_ref()
+                                    .filter(|indicator| indicator.target_id == drop_id)
+                                    .map(|indicator| indicator.side)
+                                    .unwrap_or(NotebookInsertSide::Before),
+                                Mode::Setup(_) => NotebookInsertSide::Before,
+                            };
+                            this.reorder_notebook(
+                                drag.id.clone(),
+                                drag.parent_id.clone(),
+                                drop_id.clone(),
+                                drop_parent_id.clone(),
+                                side,
+                                window,
+                                cx,
+                            );
+                        },
+                    ))
                     .on_drop(cx.listener(move |this, drag: &DraggedMemo, window, cx| {
-                        this.move_memo_to_notebook(drag.id.clone(), drop_id.clone(), window, cx);
+                        this.clear_notebook_drop_indicator(cx);
+                        this.move_memo_to_notebook(
+                            drag.id.clone(),
+                            memo_drop_id.clone(),
+                            window,
+                            cx,
+                        );
                     }))
                     .on_mouse_down(
                         MouseButton::Right,
@@ -170,21 +276,19 @@ impl AppShell {
                             );
                         }),
                     )
-                    .child(nav_item(
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Mode::Main(main) = &mut this.mode {
+                            main.filter = NavFilter::Notebook(select_id.clone());
+                        }
+                        cx.notify();
+                    }))
+                    .child(nav_item_visual(
                         btn_id,
                         IconName::Book,
                         name,
                         selected_nb,
                         depth,
                         disclosure,
-                        Some(id.clone()),
-                        cx,
-                        move |this, _, _, cx| {
-                            if let Mode::Main(main) = &mut this.mode {
-                                main.filter = NavFilter::Notebook(id.clone());
-                            }
-                            cx.notify();
-                        },
                     )),
             );
         }
@@ -340,11 +444,11 @@ impl AppShell {
             .child(Divider::horizontal().color(DividerColor::BorderFaded))
             .child(div().mt_1());
         for (filter, label, icon) in [
-            (TodoFilter::All, "All Tasks", IconName::FileMultiple),
-            (TodoFilter::Inbox, "Inbox", IconName::File),
-            (TodoFilter::Today, "Today", IconName::FileMultiple),
-            (TodoFilter::Upcoming, "Upcoming", IconName::FileMultiple),
-            (TodoFilter::Completed, "Completed", IconName::Check),
+            (TodoFilter::All, "All Tasks", IconName::ListTodo),
+            (TodoFilter::Inbox, "Inbox", IconName::Envelope),
+            (TodoFilter::Today, "Today", IconName::Clock),
+            (TodoFilter::Upcoming, "Upcoming", IconName::ArrowUpRight),
+            (TodoFilter::Completed, "Completed", IconName::TodoComplete),
             (TodoFilter::Trash, "Trash", IconName::Trash),
         ] {
             let text = format!("{} ({})", label, count(filter));
@@ -559,6 +663,20 @@ fn nav_item(
     cx: &mut Context<AppShell>,
     on_click: impl Fn(&mut AppShell, &gpui::ClickEvent, &mut Window, &mut Context<AppShell>) + 'static,
 ) -> impl IntoElement {
+    nav_item_visual(id, icon, label, selected, depth, disclosure)
+        .on_click(cx.listener(on_click))
+}
+
+/// Visual nav row without its own click/drag hit target. Use when the parent
+/// stateful div owns selection clicks and drag-and-drop.
+fn nav_item_visual(
+    id: impl Into<gpui::ElementId>,
+    icon: IconName,
+    label: impl Into<gpui::SharedString>,
+    selected: bool,
+    depth: i32,
+    disclosure: Option<IconButton>,
+) -> ListItem {
     let label = label.into();
     let indent = px((depth.max(0) as f32) * 12.);
     let spacer = disclosure.is_none() && depth > 0;
@@ -575,5 +693,4 @@ fn nav_item(
                 .child(Icon::new(icon).size(IconSize::Small).color(Color::Muted)),
         )
         .child(Label::new(label).size(LabelSize::Small))
-        .on_click(cx.listener(on_click))
 }

@@ -6,8 +6,9 @@ use workspace::Save as WorkspaceSave;
 use zed_actions::command_palette::Toggle as CommandPaletteToggle;
 
 use crate::panda_actions::{
-    DeleteMemo, FormatMemo, GoToLine, NewMemo, OpenAbout, OpenInstances, OpenSettings, Quit,
-    Refresh, SaveMemo, ToggleCommandPalette, ToggleNavPane, TogglePreview, ToggleStatusBar,
+    CreateJournal, DeleteMemo, FormatMemo, GoToLine, NewMemo, OpenAbout, OpenInstances,
+    OpenSettings, Quit, Refresh, SaveMemo, ToggleCommandPalette, ToggleNavPane, TogglePreview,
+    ToggleStatusBar,
 };
 use crate::shell::AppShell;
 
@@ -21,10 +22,14 @@ pub fn init(cx: &mut App) {
     });
 
     cx.on_action(|_: &OpenSettings, cx| {
-        crate::settings_window::SettingsWindow::open(cx);
+        with_main(cx, |shell, window, cx| {
+            shell.open_settings_window(window, cx)
+        });
     });
     cx.on_action(|_: &zed_actions::OpenSettings, cx| {
-        crate::settings_window::SettingsWindow::open(cx);
+        with_main(cx, |shell, window, cx| {
+            shell.open_settings_window(window, cx)
+        });
     });
     cx.on_action(|_: &OpenAbout, cx| {
         crate::about_window::AboutWindow::open(cx);
@@ -32,6 +37,10 @@ pub fn init(cx: &mut App) {
 
     cx.on_action(|_: &NewMemo, cx| {
         with_main(cx, |shell, window, cx| shell.create_memo(window, cx));
+    });
+
+    cx.on_action(|_: &CreateJournal, cx| {
+        with_main(cx, |shell, window, cx| shell.create_journal(window, cx));
     });
 
     cx.on_action(|_: &DeleteMemo, cx| {

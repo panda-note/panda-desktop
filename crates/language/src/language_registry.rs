@@ -1,11 +1,15 @@
 use crate::available_languages::AvailableLanguage;
+#[cfg(feature = "wasm")]
+use crate::with_parser;
 use crate::{
     CachedLspAdapter, File, Language, LanguageConfig, LanguageId, LanguageMatcher,
     LanguageServerName, LspAdapter, ManifestName, PLAIN_TEXT, ToolchainLister,
     available_languages::AvailableLanguages, language_settings::all_language_settings,
-    task_context::ContextProvider, with_parser,
+    task_context::ContextProvider,
 };
-use anyhow::{Context as _, Result, anyhow};
+#[cfg(feature = "wasm")]
+use anyhow::Context as _;
+use anyhow::{Result, anyhow};
 use collections::{FxHashMap, HashMap, HashSet, hash_map};
 pub use language_core::{
     BinaryStatus, LanguageName, LanguageQueries, LanguageServerStatusUpdate,
@@ -23,15 +27,18 @@ use lsp::LanguageServerId;
 use parking_lot::{Mutex, RwLock};
 use postage::watch;
 
+#[cfg(feature = "wasm")]
+use std::ffi::OsStr;
 use std::{
-    ffi::OsStr,
     path::{Path, PathBuf},
     sync::Arc,
 };
 use text::Rope;
 use theme::Theme;
 
-use util::{maybe, post_inc};
+#[cfg(feature = "wasm")]
+use util::maybe;
+use util::post_inc;
 
 pub struct LanguageRegistry {
     state: RwLock<LanguageRegistryState>,
@@ -68,6 +75,7 @@ pub struct FakeLanguageServerEntry {
     pub _server: Option<lsp::FakeLanguageServer>,
 }
 
+#[allow(dead_code)] // WASM-only variants are constructed when the `wasm` feature is enabled.
 enum AvailableGrammar {
     Native(tree_sitter::Language),
     Loaded(#[allow(unused)] PathBuf, tree_sitter::Language),

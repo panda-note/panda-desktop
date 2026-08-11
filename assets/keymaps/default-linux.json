@@ -1097,6 +1097,13 @@
     }
   },
   {
+    "context": "CommandPalette > Editor",
+    "bindings": {
+      "enter": "menu::Confirm",
+      "escape": "menu::Cancel"
+    }
+  },
+  {
     "context": "CommitEditor > Editor",
     "bindings": {
       "escape": "git_panel::FocusChanges",

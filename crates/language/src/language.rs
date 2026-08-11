@@ -134,6 +134,7 @@ where
     F: FnOnce(&mut Parser) -> R,
 {
     let mut parser = PARSERS.lock().pop().unwrap_or_else(|| {
+        #[allow(unused_mut)] // The WASM configuration mutates the newly created parser below.
         let mut parser = Parser::new();
         #[cfg(feature = "wasm")]
         {

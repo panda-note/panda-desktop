@@ -876,6 +876,14 @@
     }
   },
   {
+    "context": "CommandPalette > Editor",
+    "use_key_equivalents": true,
+    "bindings": {
+      "enter": "menu::Confirm",
+      "escape": "menu::Cancel"
+    }
+  },
+  {
     "context": "Editor && renaming",
     "use_key_equivalents": true,
     "bindings": {

@@ -1,4 +1,4 @@
-use gpui::{Context, Focusable, Window, deferred, div, prelude::*, px};
+use gpui::{Context, Focusable, StyleRefinement, Window, deferred, div, prelude::*, px};
 use markdown::{MarkdownElement, MarkdownFont, MarkdownStyle};
 use menu::Confirm;
 use search::BufferSearchBar;
@@ -39,6 +39,7 @@ impl AppShell {
             .clone()
             .filter(|bar| !bar.read(cx).is_dismissed());
         let preview = main.preview.clone();
+        let preview_scroll_handle = main.preview_scroll_handle.clone();
         let memo_display_mode = main.memo_display_mode;
         let sync_state = main.active.as_ref().map(|a| a.sync_state);
         let active_id = main.active.as_ref().map(|a| a.id.clone());
@@ -47,7 +48,9 @@ impl AppShell {
             .as_ref()
             .map(|a| a.tags.clone())
             .unwrap_or_default();
-        let style = MarkdownStyle::themed(MarkdownFont::Preview, window, cx);
+        let style = memo_display_mode
+            .shows_preview()
+            .then(|| MarkdownStyle::themed(MarkdownFont::Preview, window, cx));
 
         let title_row = has_memo.then(|| {
             let tag_query = tag_editor
@@ -204,10 +207,20 @@ impl AppShell {
                 .children(tag_suggestions)
         });
 
-        let mut body = h_flex().flex_1().w_full().min_w_0().overflow_hidden();
+        let mut body = h_flex().flex_1().w_full().min_w_0().min_h_0().overflow_hidden();
         if let Some(editor) = editor {
-            if memo_display_mode != MemoDisplayMode::Read {
-                body = body.child(div().flex_1().min_w_0().h_full().p_2().child(editor));
+            if memo_display_mode.shows_editor() {
+                body = body.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .min_h_0()
+                        .h_full()
+                        .p_2()
+                        .child(
+                            editor.cached(StyleRefinement::default().size_full()),
+                        ),
+                );
             }
         } else {
             let focus = self.focus_handle(cx);
@@ -270,25 +283,29 @@ impl AppShell {
                     ),
             );
         }
-        if memo_display_mode != MemoDisplayMode::Source {
-            if let Some(preview) = preview {
+        if memo_display_mode.shows_preview() {
+            if let (Some(preview), Some(style)) = (preview, style) {
+                let mut element = MarkdownElement::new(preview, style);
+                if memo_display_mode == MemoDisplayMode::Live {
+                    element = element
+                        .scroll_handle(preview_scroll_handle.clone())
+                        .show_root_block_markers();
+                }
                 body = body.child(
                     div()
-                        .when(memo_display_mode == MemoDisplayMode::Live, |this| {
-                            this.flex_1()
+                        .id(if memo_display_mode == MemoDisplayMode::Live {
+                            "memo-live-preview"
+                        } else {
+                            "memo-read-preview"
                         })
-                        .when(memo_display_mode == MemoDisplayMode::Read, |this| {
-                            this.flex_1()
-                        })
+                        .flex_1()
                         .min_w_0()
+                        .min_h_0()
                         .h_full()
-                        .when(memo_display_mode == MemoDisplayMode::Live, |this| {
-                            this.border_l_1()
-                        })
-                        .border_color(cx.theme().colors().border)
                         .p_3()
-                        .overflow_hidden()
-                        .child(MarkdownElement::new(preview, style)),
+                        .overflow_y_scroll()
+                        .track_scroll(&preview_scroll_handle)
+                        .child(element),
                 );
             }
         }
@@ -370,8 +387,24 @@ impl AppShell {
                 .and_then(|editor| editor.read(cx).text(cx).parse::<i64>().ok())
                 .unwrap_or(0)
                 .clamp(0, 3);
-            let due_menu = todo_due_menu(window, cx);
-            let priority_menu = todo_priority_menu(window, cx);
+            let due_menu = {
+                let Mode::Main(main) = &mut self.mode else {
+                    return div().into_any_element();
+                };
+                if main.todo_due_menu.is_none() {
+                    main.todo_due_menu = Some(todo_due_menu(window, cx));
+                }
+                main.todo_due_menu.clone().unwrap()
+            };
+            let priority_menu = {
+                let Mode::Main(main) = &mut self.mode else {
+                    return div().into_any_element();
+                };
+                if main.todo_priority_menu.is_none() {
+                    main.todo_priority_menu = Some(todo_priority_menu(window, cx));
+                }
+                main.todo_priority_menu.clone().unwrap()
+            };
             let title = title_editor.map(|editor| {
                 let focus = editor.read(cx).focus_handle(cx);
                 div()
@@ -486,7 +519,14 @@ impl AppShell {
         } else {
             pane = pane.child(Label::new("Select a task").color(Color::Muted));
         }
-        pane.into_any_element()
+        div()
+            .flex_1()
+            .h_full()
+            .min_w_0()
+            .min_h_0()
+            .size_full()
+            .child(pane)
+            .into_any_element()
     }
 
     fn buffer_search_bar_entity(

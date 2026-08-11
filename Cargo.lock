@@ -13007,9 +13007,11 @@ dependencies = [
 name = "panda_sync"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "panda_api",
  "panda_core",
  "panda_store",
+ "serde_json",
 ]
 
 [[package]]
@@ -13028,8 +13030,10 @@ dependencies = [
  "panda_core",
  "panda_session",
  "panda_store",
+ "panda_sync",
  "platform_title_bar",
  "search",
+ "serde_json",
  "settings",
  "smallvec",
  "smol",

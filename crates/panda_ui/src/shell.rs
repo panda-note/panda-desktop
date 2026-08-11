@@ -13,6 +13,7 @@ use ui::{h_flex, v_flex};
 use vim::ModeIndicator;
 
 use crate::app_menu::AppMenuBar;
+use crate::chrome::cached_flex_child_style;
 use crate::command_palette::PandaCommandPalette;
 use crate::state::{DraggedPane, MAX_PANE_WIDTH, MIN_PANE_WIDTH, Mode, RenameTarget, ResizePane};
 
@@ -86,7 +87,7 @@ impl AppShell {
         shell
     }
 
-    fn render_resize_handle(
+    pub(crate) fn render_resize_handle(
         &self,
         id: &'static str,
         pane: ResizePane,
@@ -104,6 +105,27 @@ impl AppShell {
                 cx.new(|_| drag.clone())
             })
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .into_any_element()
+    }
+
+    pub(crate) fn render_side_chrome(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let Mode::Main(main) = &self.mode else {
+            return div().into_any_element();
+        };
+        let nav_collapsed = main.nav_collapsed;
+        let mut panes = h_flex().h_full();
+        if !nav_collapsed {
+            panes = panes
+                .child(self.render_nav_pane(window, cx))
+                .child(self.render_resize_handle("resize-nav", ResizePane::Nav, cx));
+        }
+        panes
+            .child(self.render_memo_list(window, cx))
+            .child(self.render_resize_handle("resize-list", ResizePane::List, cx))
             .into_any_element()
     }
 
@@ -138,12 +160,25 @@ impl Focusable for AppShell {
 
 impl Render for AppShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // PlatformTitleBar consumes children via mem::take on each paint; replenish
+        // them here (same pattern as Zed's TitleBar) so the app menu cannot vanish
+        // when AppShell is re-rendered via the ancestor dirty walk without notify.
         self.sync_title_bar(cx);
 
         let content = match &self.mode {
             Mode::Setup(_) => self.render_setup(window, cx),
             Mode::Main(main) => {
                 let nav_collapsed = main.nav_collapsed;
+                let side_width = {
+                    let list = main.list_width + px(4.);
+                    if nav_collapsed {
+                        list
+                    } else {
+                        main.nav_width + px(4.) + list
+                    }
+                };
+                let side_chrome = main.side_chrome.clone();
+                let editor_chrome = main.editor_chrome.clone();
                 let error = self.render_error_banner(cx);
                 let context_menu = main.context_menu.as_ref().map(|(menu, position, _)| {
                     deferred(
@@ -231,15 +266,17 @@ impl Render for AppShell {
                         this.handle_pane_drag_move(e, cx);
                     },
                 ));
-                if !nav_collapsed {
-                    panes = panes
-                        .child(self.render_nav_pane(window, cx))
-                        .child(self.render_resize_handle("resize-nav", ResizePane::Nav, cx));
+                if let Some(side) = side_chrome {
+                    panes = panes.child(side.cached(
+                        gpui::StyleRefinement::default()
+                            .h_full()
+                            .w(side_width)
+                            .flex_none(),
+                    ));
                 }
-                panes = panes
-                    .child(self.render_memo_list(window, cx))
-                    .child(self.render_resize_handle("resize-list", ResizePane::List, cx))
-                    .child(self.render_editor_pane(window, cx));
+                if let Some(editor) = editor_chrome {
+                    panes = panes.child(editor.cached(cached_flex_child_style()));
+                }
 
                 v_flex()
                     .size_full()

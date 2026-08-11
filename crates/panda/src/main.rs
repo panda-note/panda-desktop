@@ -33,7 +33,7 @@ fn main() {
                     r##"{
                         "vim_mode": true,
                         "base_keymap": "VSCode",
-                        "current_line_highlight": "all",
+                        "current_line_highlight": "gutter",
                         "gutter": {
                             "line_numbers": true,
                             "breakpoints": false,

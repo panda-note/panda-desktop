@@ -21,6 +21,10 @@ impl AppShell {
             return;
         };
         let children = self.title_bar_children(cx);
+        // PlatformTitleBar::render mem::take's its children, so this must run in
+        // AppShell::render immediately before the title bar is painted (Zed's
+        // TitleBar uses the same pattern). Do not notify here — we are already
+        // inside a render pass that will paint the title bar as a child.
         title_bar.update(cx, |bar, _cx| {
             bar.set_children(children);
         });
@@ -35,6 +39,12 @@ impl AppShell {
             Mode::Main(main)
                 if main.workspace_mode == WorkspaceMode::Todos
                     && main.todo_filter == panda_core::TodoFilter::Trash
+        );
+        let memo_trash = matches!(
+            &self.mode,
+            Mode::Main(main)
+                if main.workspace_mode == WorkspaceMode::Memos
+                    && matches!(main.filter, panda_core::NavFilter::Trash)
         );
         let (search_editor, search_dropdown) = match &self.mode {
             Mode::Main(main) if main.workspace_mode == WorkspaceMode::Memos => (
@@ -107,14 +117,34 @@ impl AppShell {
                                         }
                                     })),
                             )
-                            .when(!todo_workspace, |this| this.child(
+                            .when(!todo_workspace && !memo_trash, |this| this.child(
                                 IconButton::new("title-delete", IconName::Trash)
                                     .icon_size(IconSize::Small)
                                     .style(ButtonStyle::Subtle)
-                                    .tooltip(Tooltip::text("Delete memo"))
+                                    .tooltip(Tooltip::text("Move memo to trash"))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.delete_selected(window, cx)
                                     })),
+                            )
+                            .when(!todo_workspace && memo_trash, |this| this
+                                .child(
+                                    IconButton::new("title-memo-restore", IconName::GenericRestore)
+                                        .icon_size(IconSize::Small)
+                                        .style(ButtonStyle::Subtle)
+                                        .tooltip(Tooltip::text("Restore memo"))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.restore_selected(window, cx);
+                                        })),
+                                )
+                                .child(
+                                    IconButton::new("title-memo-permanent-delete", IconName::Trash)
+                                        .icon_size(IconSize::Small)
+                                        .style(ButtonStyle::Subtle)
+                                        .tooltip(Tooltip::text("Delete permanently (cannot be undone)"))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.permanently_delete_selected(window, cx);
+                                        })),
+                                ),
                             )
                             .when(todo_workspace && !todo_trash, |this| this.child(
                                 IconButton::new(
@@ -242,6 +272,7 @@ impl AppShell {
                 tags: memo.tags.clone(),
                 notebook_name: Some(notebook_name),
                 is_pinned: memo.is_pinned,
+                updated_at: None,
                 highlight_query: Some(query.to_string()),
             };
             list = list.child(

@@ -13,11 +13,13 @@ actions!(
         OpenAbout,
         /// Create a new memo in the active notebook.
         NewMemo,
+        /// Create or open today's journal memo.
+        CreateJournal,
         /// Delete the selected memo.
         DeleteMemo,
         /// Refresh notebooks and memos from the server.
         Refresh,
-        /// Cycle Source, Live and Read Markdown projections.
+        /// Cycle Source and Read Markdown projections.
         TogglePreview,
         /// Toggle the bottom status bar.
         ToggleStatusBar,
@@ -46,6 +48,7 @@ pub fn app_menus() -> Vec<gpui::Menu> {
             disabled: false,
             items: vec![
                 MenuItem::action("New Memo", NewMemo),
+                MenuItem::action("Create Journal", CreateJournal),
                 MenuItem::action("Save Memo", SaveMemo),
                 MenuItem::action("Delete Memo", DeleteMemo),
                 MenuItem::action("Refresh", Refresh),

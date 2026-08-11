@@ -648,6 +648,8 @@ impl EditorElement {
             register_action(editor, window, Editor::toggle_markdown_inline_code);
             register_action(editor, window, Editor::toggle_markdown_code_block);
             register_action(editor, window, Editor::insert_markdown_link);
+            register_action(editor, window, Editor::insert_markdown_image);
+            register_action(editor, window, Editor::insert_markdown_table);
             register_action(editor, window, Editor::insert_markdown_horizontal_rule);
             register_action(editor, window, Editor::unwrap_syntax_node);
             register_action(editor, window, Editor::accept_next_word_edit_prediction);

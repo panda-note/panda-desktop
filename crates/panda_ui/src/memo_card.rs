@@ -11,8 +11,20 @@ pub(crate) struct MemoCardData {
     pub tags: Vec<String>,
     pub notebook_name: Option<String>,
     pub is_pinned: bool,
+    /// Shown on ordinary note cards. Search results omit it to keep the dropdown compact.
+    pub updated_at: Option<String>,
     /// Only search suggestions set this. Ordinary memo rows keep their existing rendering.
     pub highlight_query: Option<String>,
+}
+
+fn format_updated_at(updated_at: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(updated_at)
+        .map(|time| {
+            time.with_timezone(&chrono::Local)
+                .format("%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|_| updated_at.to_string())
 }
 
 fn match_indices(text: &str, query: Option<&str>) -> Vec<usize> {
@@ -72,10 +84,12 @@ fn memo_card_content(data: MemoCardData, is_selected: bool, cx: &App) -> AnyElem
         tags,
         notebook_name,
         is_pinned,
+        updated_at,
         highlight_query,
     } = data;
     let query = highlight_query.as_deref();
     v_flex()
+        .h_full()
         .gap_0p5()
         .w_full()
         .min_w_0()
@@ -112,20 +126,33 @@ fn memo_card_content(data: MemoCardData, is_selected: bool, cx: &App) -> AnyElem
             LabelSize::XSmall,
             Some(Color::Muted),
         )))
-        .children((!tags.is_empty()).then(|| {
-            h_flex()
-                .gap_1()
-                .w_full()
-                .min_w_0()
-                .overflow_hidden()
-                .children(
-                    tags.into_iter()
-                        // 窄搜索下拉保留一个可读标签，避免多个 chip 把整行挤没。
-                        .take(1)
-                        .map(|tag| compact_tag_chip(tag, is_selected, cx)),
-                )
-                .into_any_element()
-        }))
+        .children(
+            (!tags.is_empty() || updated_at.as_deref().is_some_and(|time| !time.is_empty())).then(
+                || {
+                    h_flex()
+                        .justify_between()
+                        .w_full()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .mt_auto()
+                        .child(
+                            h_flex().gap_1().min_w_0().overflow_hidden().children(
+                                tags.into_iter()
+                                    // 窄搜索下拉保留一个可读标签，避免多个 chip 把整行挤没。
+                                    .take(1)
+                                    .map(|tag| compact_tag_chip(tag, is_selected, cx)),
+                            ),
+                        )
+                        .children(updated_at.filter(|time| !time.is_empty()).map(|time| {
+                            Label::new(format_updated_at(&time))
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted)
+                                .truncate()
+                        }))
+                        .into_any_element()
+                },
+            ),
+        )
         .into_any_element()
 }
 
@@ -137,7 +164,7 @@ pub(crate) fn memo_list_item(
     is_selected: bool,
     cx: &App,
 ) -> gpui::Stateful<Div> {
-    // 搜索结果额外显示笔记本名，四行内容不能再沿用普通列表 72px 的三行高度。
+    // 搜索结果额外显示笔记本名，需要比普通列表多一行的高度。
     let row_height = if data.notebook_name.is_some() {
         px(92.)
     } else {
@@ -159,11 +186,12 @@ pub(crate) fn memo_list_item(
         .child(
             h_flex()
                 .w_full()
+                .h_full()
                 .min_w_0()
                 .overflow_hidden()
                 .gap_2()
                 .items_start()
-                .child(div().flex_1().min_w_0().child(content))
+                .child(div().flex_1().h_full().min_w_0().child(content))
                 .child(sync_indicator(sync)),
         )
 }

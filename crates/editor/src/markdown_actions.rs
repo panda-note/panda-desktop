@@ -235,6 +235,49 @@ impl Editor {
         self.insert(&replacement, window, cx);
     }
 
+    pub fn insert_markdown_image(
+        &mut self,
+        _: &InsertImage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_in_markdown_language(cx) || self.read_only(cx) {
+            return;
+        }
+        let display_snapshot = self.display_snapshot(cx);
+        let selection = self
+            .selections
+            .newest::<MultiBufferOffset>(&display_snapshot);
+        let selected: String = self
+            .buffer()
+            .read(cx)
+            .read(cx)
+            .text_for_range(selection.start..selection.end)
+            .collect();
+        let replacement = if selected.is_empty() {
+            "![alt](url)".to_string()
+        } else {
+            format!("![{selected}](url)")
+        };
+        self.insert(&replacement, window, cx);
+    }
+
+    pub fn insert_markdown_table(
+        &mut self,
+        _: &InsertTable,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_in_markdown_language(cx) || self.read_only(cx) {
+            return;
+        }
+        self.insert(
+            "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |\n",
+            window,
+            cx,
+        );
+    }
+
     pub fn insert_markdown_horizontal_rule(
         &mut self,
         _: &InsertHorizontalRule,

@@ -1,14 +1,15 @@
 //! Markdown format toolbar for the memo editor.
 
 use editor::actions::{
-    InsertHorizontalRule, InsertLink, ToggleBlockQuote, ToggleBold, ToggleCodeBlock,
-    ToggleHeading1, ToggleHeading2, ToggleHeading3, ToggleInlineCode, ToggleItalic,
-    ToggleOrderedList, ToggleStrikethrough, ToggleTaskList, ToggleUnorderedList,
+    InsertHorizontalRule, InsertImage, InsertLink, InsertTable, ToggleBlockQuote, ToggleBold,
+    ToggleCodeBlock, ToggleHeading1, ToggleHeading2, ToggleHeading3, ToggleHeading4,
+    ToggleHeading5, ToggleHeading6, ToggleInlineCode, ToggleItalic, ToggleOrderedList,
+    ToggleStrikethrough, ToggleTaskList, ToggleUnorderedList,
 };
 use gpui::{Action, AnyElement, Context, FocusHandle, Focusable, Window, div, prelude::*, px};
 use theme::ActiveTheme;
 use ui::prelude::*;
-use ui::{Divider, DividerColor, TintColor, Tooltip};
+use ui::{ContextMenu, Divider, DividerColor, DropdownMenu, DropdownStyle, TintColor, Tooltip};
 
 use crate::shell::AppShell;
 use crate::state::{MemoDisplayMode, Mode};
@@ -32,7 +33,7 @@ impl AppShell {
     }
 
     pub(crate) fn render_format_toolbar(
-        &self,
+        &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
@@ -58,33 +59,20 @@ impl AppShell {
                     .border_b_1()
                     .border_color(cx.theme().colors().border)
                     .bg(cx.theme().colors().editor_background)
-                    .child(display_mode_btn(
-                        "fmt-view-source",
-                        "Source",
-                        "Markdown source (Vim/editor)",
-                        MemoDisplayMode::Source,
-                        display_mode,
-                        cx,
-                    ))
-                    .child(display_mode_btn(
-                        "fmt-view-live",
-                        "Live",
-                        "Editable source with rendered Markdown beside it",
-                        MemoDisplayMode::Live,
-                        display_mode,
-                        cx,
-                    ))
-                    .child(display_mode_btn(
-                        "fmt-view-read",
-                        "Read",
-                        "Rendered Markdown only",
-                        MemoDisplayMode::Read,
-                        display_mode,
-                        cx,
-                    ))
+                    .children(display_mode_buttons(display_mode, cx))
                     .into_any_element(),
             );
         }
+
+        let heading_menu = {
+            let Mode::Main(main) = &mut self.mode else {
+                return None;
+            };
+            if main.heading_menu.is_none() {
+                main.heading_menu = Some(heading_menu(window, cx));
+            }
+            main.heading_menu.clone().unwrap()
+        };
 
         let toolbar = h_flex()
             .id("memo-format-toolbar")
@@ -96,55 +84,14 @@ impl AppShell {
             .border_b_1()
             .border_color(cx.theme().colors().border)
             .bg(cx.theme().colors().editor_background)
-            .child(display_mode_btn(
-                "fmt-view-source",
-                "Source",
-                "Markdown source (Vim/editor)",
-                MemoDisplayMode::Source,
-                display_mode,
-                cx,
-            ))
-            .child(display_mode_btn(
-                "fmt-view-live",
-                "Live",
-                "Editable source with rendered Markdown beside it",
-                MemoDisplayMode::Live,
-                display_mode,
-                cx,
-            ))
-            .child(display_mode_btn(
-                "fmt-view-read",
-                "Read",
-                "Rendered Markdown only",
-                MemoDisplayMode::Read,
-                display_mode,
-                cx,
-            ))
+            .children(display_mode_buttons(display_mode, cx))
             .child(toolbar_sep())
-            .child(label_fmt_btn(
-                "fmt-h1",
-                "H1",
-                "Heading 1",
-                &ToggleHeading1,
-                &focus,
-                cx,
-            ))
-            .child(label_fmt_btn(
-                "fmt-h2",
-                "H2",
-                "Heading 2",
-                &ToggleHeading2,
-                &focus,
-                cx,
-            ))
-            .child(label_fmt_btn(
-                "fmt-h3",
-                "H3",
-                "Heading 3",
-                &ToggleHeading3,
-                &focus,
-                cx,
-            ))
+            .child(
+                DropdownMenu::new("fmt-heading", "H", heading_menu)
+                    .style(DropdownStyle::Subtle)
+                    .trigger_size(ButtonSize::Compact)
+                    .trigger_tooltip(Tooltip::text("Heading")),
+            )
             .child(toolbar_sep())
             .child(label_fmt_btn(
                 "fmt-bold",
@@ -229,6 +176,22 @@ impl AppShell {
                 cx,
             ))
             .child(icon_fmt_btn(
+                "fmt-image",
+                IconName::Image,
+                "Insert Image",
+                &InsertImage,
+                &focus,
+                cx,
+            ))
+            .child(label_fmt_btn(
+                "fmt-table",
+                "Tbl",
+                "Insert Table",
+                &InsertTable,
+                &focus,
+                cx,
+            ))
+            .child(icon_fmt_btn(
                 "fmt-hr",
                 IconName::Dash,
                 "Horizontal Rule",
@@ -237,9 +200,88 @@ impl AppShell {
                 cx,
             ));
 
-        let _ = window;
         Some(toolbar.into_any_element())
     }
+}
+
+fn heading_menu(window: &mut Window, cx: &mut Context<AppShell>) -> gpui::Entity<ContextMenu> {
+    let entity = cx.weak_entity();
+    ContextMenu::build(window, cx, move |menu, _, _| {
+        let h1 = entity.clone();
+        let h2 = entity.clone();
+        let h3 = entity.clone();
+        let h4 = entity.clone();
+        let h5 = entity.clone();
+        let h6 = entity.clone();
+        menu.entry("Heading 1", Some(Box::new(ToggleHeading1)), move |window, cx| {
+            h1.update(cx, |this, cx| {
+                this.dispatch_editor_action(Box::new(ToggleHeading1), window, cx);
+            })
+            .ok();
+        })
+        .entry("Heading 2", Some(Box::new(ToggleHeading2)), move |window, cx| {
+            h2.update(cx, |this, cx| {
+                this.dispatch_editor_action(Box::new(ToggleHeading2), window, cx);
+            })
+            .ok();
+        })
+        .entry("Heading 3", Some(Box::new(ToggleHeading3)), move |window, cx| {
+            h3.update(cx, |this, cx| {
+                this.dispatch_editor_action(Box::new(ToggleHeading3), window, cx);
+            })
+            .ok();
+        })
+        .entry("Heading 4", Some(Box::new(ToggleHeading4)), move |window, cx| {
+            h4.update(cx, |this, cx| {
+                this.dispatch_editor_action(Box::new(ToggleHeading4), window, cx);
+            })
+            .ok();
+        })
+        .entry("Heading 5", Some(Box::new(ToggleHeading5)), move |window, cx| {
+            h5.update(cx, |this, cx| {
+                this.dispatch_editor_action(Box::new(ToggleHeading5), window, cx);
+            })
+            .ok();
+        })
+        .entry("Heading 6", Some(Box::new(ToggleHeading6)), move |window, cx| {
+            h6.update(cx, |this, cx| {
+                this.dispatch_editor_action(Box::new(ToggleHeading6), window, cx);
+            })
+            .ok();
+        })
+    })
+}
+
+fn display_mode_buttons(
+    selected: MemoDisplayMode,
+    cx: &mut Context<AppShell>,
+) -> [AnyElement; 3] {
+    [
+        display_mode_btn(
+            "fmt-view-source",
+            "Source",
+            "Markdown source (Vim/editor)",
+            MemoDisplayMode::Source,
+            selected,
+            cx,
+        ),
+        display_mode_btn(
+            "fmt-view-live",
+            "Live",
+            "Editor + preview (scroll-follows-editor)",
+            MemoDisplayMode::Live,
+            selected,
+            cx,
+        ),
+        display_mode_btn(
+            "fmt-view-read",
+            "Read",
+            "Rendered Markdown only",
+            MemoDisplayMode::Read,
+            selected,
+            cx,
+        ),
+    ]
 }
 
 fn display_mode_btn(

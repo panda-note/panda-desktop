@@ -2,7 +2,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use editor::Editor;
-use gpui::{Empty, Entity, Pixels, Point, Render, SharedString, Subscription, px};
+use gpui::{
+    Empty, Entity, Pixels, Point, Render, ScrollHandle, SharedString, Subscription, px,
+};
 use panda_api::ApiClient;
 use panda_core::{
     ActiveMemo, Instance, MemoSummary, NavFilter, Notebook, SyncState, Todo, TodoFilter,
@@ -27,6 +29,19 @@ pub(crate) enum WorkspaceMode {
     Todos,
 }
 
+/// Where a dragged notebook will be inserted relative to a hover target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NotebookInsertSide {
+    Before,
+    After,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct NotebookDropIndicator {
+    pub target_id: String,
+    pub side: NotebookInsertSide,
+}
+
 /// How memo Markdown is presented.  The document always remains the same
 /// `editor::Editor` buffer; this only changes its projection on screen.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -34,10 +49,30 @@ pub(crate) enum MemoDisplayMode {
     /// The established editor-only experience (including Vim and buffer search).
     #[default]
     Source,
-    /// Keep the editor interactive while showing its rendered Markdown beside it.
+    /// Side-by-side editor + rendered preview. Preview scroll follows the
+    /// editor only when the editor itself scrolls — plain Vim j/k inside the
+    /// viewport does not notify or refresh the shell.
     Live,
     /// A distraction-free rendered view. Switching back never changes the buffer.
     Read,
+}
+
+impl MemoDisplayMode {
+    pub(crate) fn shows_editor(self) -> bool {
+        !matches!(self, Self::Read)
+    }
+
+    pub(crate) fn shows_preview(self) -> bool {
+        matches!(self, Self::Live | Self::Read)
+    }
+
+    pub(crate) fn cycle(self) -> Self {
+        match self {
+            Self::Source => Self::Live,
+            Self::Live => Self::Read,
+            Self::Read => Self::Source,
+        }
+    }
 }
 
 pub(crate) struct SetupState {
@@ -74,6 +109,48 @@ pub(crate) struct DraggedMemo {
     pub id: String,
     pub title: SharedString,
     pub anchor: Option<Point<Pixels>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct DraggedNotebook {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub name: SharedString,
+    pub anchor: Option<Point<Pixels>>,
+}
+
+impl Render for DraggedNotebook {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::prelude::*;
+        use theme::ActiveTheme;
+        use ui::prelude::*;
+        let card = h_flex()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .bg(cx.theme().colors().elevated_surface_background)
+            .border_1()
+            .border_color(cx.theme().colors().border)
+            .child(
+                Icon::new(IconName::Book)
+                    .size(IconSize::Small)
+                    .color(Color::Muted),
+            )
+            .child(Label::new(self.name.clone()).size(LabelSize::Small));
+        if let Some(anchor) = self.anchor {
+            div()
+                .pl(anchor.x - px(40.))
+                .pt(anchor.y - px(12.))
+                .child(card)
+        } else {
+            card
+        }
+    }
 }
 
 impl Render for DraggedMemo {
@@ -142,7 +219,15 @@ pub(crate) struct MainState {
     pub search_results: Option<Vec<(MemoSummary, SyncState)>>,
     pub available_tags: Vec<String>,
     pub preview: Option<Entity<markdown::Markdown>>,
+    pub preview_scroll_handle: ScrollHandle,
     pub memo_display_mode: MemoDisplayMode,
+    /// Cached format-toolbar heading menu. Rebuilt only when missing — never on
+    /// every AppShell paint (Vim motion dirties the shell via ancestor walks).
+    pub heading_menu: Option<Entity<ContextMenu>>,
+    pub todo_due_menu: Option<Entity<ContextMenu>>,
+    pub todo_priority_menu: Option<Entity<ContextMenu>>,
+    pub side_chrome: Option<Entity<crate::chrome::SideChrome>>,
+    pub editor_chrome: Option<Entity<crate::chrome::EditorChrome>>,
     pub status: SharedString,
     pub error: Option<SharedString>,
     pub save_generation: u64,
@@ -156,6 +241,8 @@ pub(crate) struct MainState {
     pub list_width: Pixels,
     pub nav_collapsed: bool,
     pub collapsed_notebooks: HashSet<String>,
+    /// Insert-line affordance while reordering notebooks (before/after a row).
+    pub notebook_drop_indicator: Option<NotebookDropIndicator>,
     pub context_menu: Option<(Entity<ContextMenu>, Point<Pixels>, Subscription)>,
     pub rename_dialog: Option<RenameDialog>,
     pub _rename_sub: Option<Subscription>,
@@ -164,7 +251,8 @@ pub(crate) struct MainState {
     pub _search_sub: Option<Subscription>,
     pub _buffer_search_sub: Option<Subscription>,
     pub _buffer_sub: Option<Subscription>,
-    pub _preview_sub: Option<Subscription>,
+    /// Live preview scroll sync — listens for editor scroll, not selection motion.
+    pub _preview_scroll_sub: Option<Subscription>,
 }
 
 impl MainState {

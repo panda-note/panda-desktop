@@ -528,6 +528,18 @@ impl ApiClient {
         })
     }
 
+    pub async fn restore_memo(&self, id: &str) -> Result<(), ApiError> {
+        let _: serde_json::Value = self
+            .request_json(
+                reqwest::Method::POST,
+                &format!("/memos/{id}/restore"),
+                &self.token,
+                None,
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn batch_move_memos(
         &self,
         memo_ids: &[String],
@@ -718,6 +730,10 @@ impl ApiClient {
 
     pub fn delete_memo_blocking(&self, id: &str, permanent: bool) -> Result<(), ApiError> {
         runtime().block_on(self.delete_memo(id, permanent))
+    }
+
+    pub fn restore_memo_blocking(&self, id: &str) -> Result<(), ApiError> {
+        runtime().block_on(self.restore_memo(id))
     }
 
     pub fn batch_move_memos_blocking(

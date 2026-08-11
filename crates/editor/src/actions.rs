@@ -433,6 +433,10 @@ actions!(
         ToggleCodeBlock,
         /// Insert a markdown link.
         InsertLink,
+        /// Insert a markdown image.
+        InsertImage,
+        /// Insert a markdown table scaffold.
+        InsertTable,
         /// Insert a horizontal rule.
         InsertHorizontalRule,
     ]

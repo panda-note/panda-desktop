@@ -970,11 +970,24 @@ impl Markdown {
         cx: &mut Context<Self>,
     ) {
         if self.pending_parse.is_some() {
+            if self.pending_autoscroll == Some(source_index) {
+                return;
+            }
             self.pending_autoscroll = Some(source_index);
+        } else if self.autoscroll_request == Some(source_index) {
+            return;
         } else {
             self.autoscroll_request = Some(source_index);
         }
-        cx.refresh_windows();
+        // Prefer entity notify over refresh_windows: MarkdownElement binds
+        // `set_view_id(markdown.entity_id())`, so a view-local frame is enough.
+        // refresh_windows forces a full AppShell/workspace rebuild and makes
+        // cursor-driven Live sync feel like hitching on every j/k.
+        cx.notify();
+    }
+
+    pub fn active_root_block(&self) -> Option<usize> {
+        self.active_root_block
     }
 
     fn footnote_definition_content_start(&self, label: &SharedString) -> Option<usize> {
@@ -1007,7 +1020,7 @@ impl Markdown {
                     self.scroll_to_heading(&slug, cx);
                 } else if let Some(source_index) = self.pending_autoscroll.take() {
                     self.autoscroll_request = Some(source_index);
-                    cx.refresh_windows();
+                    cx.notify();
                 }
             }
             return;
@@ -1180,7 +1193,6 @@ impl Markdown {
             self.images_by_source_offset.clear();
             self.mermaid_state.clear(cx);
             cx.notify();
-            cx.refresh_windows();
             return;
         }
 
@@ -1351,7 +1363,6 @@ impl Markdown {
                     this.autoscroll_request = Some(source_index);
                 }
                 cx.notify();
-                cx.refresh_windows();
             })
             .ok();
         })

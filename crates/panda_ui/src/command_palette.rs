@@ -1,24 +1,24 @@
 //! Lightweight command palette for Panda actions.
 
 use editor::actions::{
-    Format as EditorFormat, InsertHorizontalRule, InsertLink, Redo, SelectAll, ToggleBlockQuote,
-    ToggleBold, ToggleCodeBlock, ToggleHeading1, ToggleHeading2, ToggleHeading3, ToggleHeading4,
-    ToggleHeading5, ToggleHeading6, ToggleInlineCode, ToggleItalic, ToggleLineNumbers,
-    ToggleOrderedList, ToggleStrikethrough, ToggleTaskList, ToggleUnorderedList, Undo,
+    Format as EditorFormat, InsertHorizontalRule, InsertImage, InsertLink, InsertTable, Newline,
+    Redo, SelectAll, ToggleBlockQuote, ToggleBold, ToggleCodeBlock, ToggleHeading1, ToggleHeading2,
+    ToggleHeading3, ToggleHeading4, ToggleHeading5, ToggleHeading6, ToggleInlineCode, ToggleItalic,
+    ToggleLineNumbers, ToggleOrderedList, ToggleStrikethrough, ToggleTaskList, ToggleUnorderedList,
+    Undo,
 };
-use editor::{Bias, Editor, EditorEvent, scroll::Autoscroll};
+use editor::{Editor, EditorEvent, SelectionEffects, scroll::Autoscroll};
 use gpui::{
-    App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, KeyContext, Render,
-    SharedString, Subscription, Window, deferred, div, prelude::*, px,
+    App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, KeyContext,
+    KeyDownEvent, KeystrokeEvent, Render, SharedString, Subscription, Window, div, prelude::*, px,
 };
-use language::Point;
 use theme::ActiveTheme;
 use ui::prelude::*;
 use ui::{Button, KeyBinding, ListItem, ListItemSpacing};
 
 use crate::panda_actions::{
-    DeleteMemo, FormatMemo, GoToLine, NewMemo, OpenInstances, OpenSettings, Quit, Refresh,
-    SaveMemo, ToggleNavPane, TogglePreview, ToggleStatusBar,
+    CreateJournal, DeleteMemo, FormatMemo, GoToLine, NewMemo, OpenInstances, OpenSettings, Quit,
+    Refresh, SaveMemo, ToggleNavPane, TogglePreview, ToggleStatusBar,
 };
 use crate::shell::AppShell;
 use crate::state::Mode;
@@ -39,10 +39,14 @@ enum PaletteItem {
 
 pub struct PandaCommandPalette {
     query: Entity<Editor>,
+    /// Active memo editor to jump in — same pattern as `go_to_line::GoToLine`.
+    active_editor: Option<Entity<Editor>>,
     entries: Vec<(SharedString, Box<dyn gpui::Action>)>,
     filtered: Vec<PaletteItem>,
     selected: usize,
     previous_focus: Option<FocusHandle>,
+    /// Parent focus handle so `on_action` / key context stay on the focus path
+    /// while the query editor (returned by [`Focusable`]) holds keyboard focus.
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -60,6 +64,7 @@ fn palette_query_editor(window: &mut Window, cx: &mut Context<Editor>) -> Editor
 impl PandaCommandPalette {
     pub fn new(
         previous_focus: Option<FocusHandle>,
+        active_editor: Option<Entity<Editor>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -77,8 +82,76 @@ impl PandaCommandPalette {
             }
         }));
 
+        // Focus stays on the query editor; parent `.on_action` is not reliably on
+        // the focus path under AppShell overlays. Handle Confirm/Cancel/Newline
+        // on the editor itself (same pattern as GoToLine modal).
+        let palette = cx.weak_entity();
+        let mut action_subs = Vec::new();
+        query.update(cx, |editor, _cx| {
+            action_subs.push(editor.register_action::<menu::Confirm>({
+                let palette = palette.clone();
+                move |_: &menu::Confirm, window, cx| {
+                    let Some(this) = palette.upgrade() else {
+                        return;
+                    };
+                    this.update(cx, |this, cx| {
+                        this.confirm(window, cx);
+                    });
+                }
+            }));
+            action_subs.push(editor.register_action::<menu::Cancel>({
+                let palette = palette.clone();
+                move |_: &menu::Cancel, _window, cx| {
+                    let Some(this) = palette.upgrade() else {
+                        return;
+                    };
+                    this.update(cx, |_this, cx| {
+                        cx.emit(DismissEvent);
+                    });
+                }
+            }));
+            action_subs.push(editor.register_action::<Newline>({
+                let palette = palette.clone();
+                move |_: &Newline, window, cx| {
+                    let Some(this) = palette.upgrade() else {
+                        return;
+                    };
+                    this.update(cx, |this, cx| {
+                        this.confirm(window, cx);
+                    });
+                }
+            }));
+        });
+        subscriptions.extend(action_subs);
+
+        // Intercept Enter/Escape before keymap dispatch while the palette is open.
+        let palette = cx.weak_entity();
+        subscriptions.push(cx.intercept_keystrokes({
+            let palette = palette.clone();
+            move |event: &KeystrokeEvent, window, cx| {
+                let Some(this) = palette.upgrade() else {
+                    return;
+                };
+                this.update(cx, |this, cx| {
+                    let mods = &event.keystroke.modifiers;
+                    if event.keystroke.key == "enter"
+                        && !mods.control
+                        && !mods.alt
+                        && !mods.platform
+                    {
+                        this.confirm(window, cx);
+                        cx.stop_propagation();
+                    } else if event.keystroke.key == "escape" {
+                        cx.emit(DismissEvent);
+                        cx.stop_propagation();
+                    }
+                });
+            }
+        }));
+
         let mut this = Self {
             query: query.clone(),
+            active_editor,
             entries,
             filtered: Vec::new(),
             selected: 0,
@@ -126,6 +199,17 @@ impl PandaCommandPalette {
     }
 
     fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Prefer numeric go-to-line whenever the query parses as a line.
+        let raw = self.query.read(cx).text(cx);
+        if let Some(line) = parse_go_to_line_query(&raw) {
+            self.jump_to_line(line, window, cx);
+            if let Some(prev) = self.previous_focus.take() {
+                window.focus(&prev, cx);
+            }
+            cx.emit(DismissEvent);
+            return;
+        }
+
         let Some(item) = self.filtered.get(self.selected) else {
             return;
         };
@@ -142,13 +226,11 @@ impl PandaCommandPalette {
             }
             PaletteItem::GoToLine { line, .. } => {
                 let line = *line;
+                self.jump_to_line(line, window, cx);
                 if let Some(prev) = self.previous_focus.take() {
                     window.focus(&prev, cx);
                 }
                 cx.emit(DismissEvent);
-                window.defer(cx, move |window, cx| {
-                    jump_to_line_in_active_editor(line, window, cx);
-                });
             }
             PaletteItem::SaveAndQuit { .. } => {
                 if let Some(prev) = self.previous_focus.take() {
@@ -161,6 +243,38 @@ impl PandaCommandPalette {
                 });
             }
         }
+    }
+
+    /// Same jump path as `go_to_line::GoToLine::confirm` — anchor + autoscroll.
+    fn jump_to_line(&self, line: u32, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor) = self.active_editor.clone() else {
+            return;
+        };
+        let Some(buffer) = editor.read(cx).active_buffer(cx) else {
+            return;
+        };
+        editor.update(cx, |editor, cx| {
+            let target_point = {
+                let buffer_snapshot = buffer.read(cx).snapshot();
+                let row = line.saturating_sub(1).min(buffer_snapshot.max_point().row);
+                buffer_snapshot.point_from_external_input(row, 0)
+            };
+            let Some(anchor) = editor
+                .buffer()
+                .read(cx)
+                .buffer_point_to_anchor(&buffer, target_point, cx)
+            else {
+                return;
+            };
+            editor.change_selections(
+                SelectionEffects::scroll(Autoscroll::center()),
+                window,
+                cx,
+                |s| s.select_anchor_ranges([anchor..anchor]),
+            );
+            editor.focus_handle(cx).focus(window, cx);
+            cx.notify();
+        });
     }
 }
 
@@ -181,6 +295,10 @@ fn parse_vim_command(raw: &str) -> Option<PaletteItem> {
                 label: "Vim: :wq — Save and quit".into(),
             });
         }
+        "j" | "journal" => (
+            "Vim: :journal — Create Journal",
+            Box::new(CreateJournal) as Box<dyn gpui::Action>,
+        ),
         _ => return None,
     };
 
@@ -208,41 +326,12 @@ fn parse_go_to_line_query(raw: &str) -> Option<u32> {
     (line >= 1).then_some(line)
 }
 
-fn jump_to_line_in_active_editor(line: u32, _window: &mut Window, cx: &mut App) {
-    let Some(handle) = cx
-        .windows()
-        .into_iter()
-        .find_map(|w| w.downcast::<AppShell>())
-    else {
-        return;
-    };
-    handle
-        .update(cx, |shell, window, cx| {
-            let Mode::Main(main) = &shell.mode else {
-                return;
-            };
-            let Some(editor) = main.editor.clone() else {
-                return;
-            };
-            editor.update(cx, |editor, cx| {
-                let snapshot = editor.buffer().read(cx).snapshot(cx);
-                let max_row = snapshot.max_point().row;
-                let row = line.saturating_sub(1).min(max_row);
-                let target = snapshot.clip_point(Point::new(row, 0), Bias::Left);
-                editor.change_selections(Default::default(), window, cx, |s| {
-                    s.select_ranges([target..target]);
-                });
-                editor.request_autoscroll(Autoscroll::center(), cx);
-            });
-        })
-        .ok();
-}
-
 impl EventEmitter<DismissEvent> for PandaCommandPalette {}
 
 impl Focusable for PandaCommandPalette {
-    fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus_handle.clone()
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        // Match Picker / GoToLine: keyboard focus lives on the query editor.
+        self.query.focus_handle(cx)
     }
 }
 
@@ -295,95 +384,108 @@ impl Render for PandaCommandPalette {
         key_context.add("Picker");
 
         let focus_for_footer = previous_focus.clone();
-        deferred(
-            v_flex()
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(gpui::hsla(0., 0., 0., 0.35))
-                .on_mouse_down(
-                    gpui::MouseButton::Left,
-                    cx.listener(|_, _, _, cx| {
-                        cx.emit(DismissEvent);
-                    }),
-                )
-                .child(
-                    v_flex()
-                        .w(px(560.))
-                        .max_h(px(460.))
-                        .occlude()
-                        .track_focus(&self.focus_handle)
-                        .key_context(key_context)
-                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(cx.theme().colors().border)
-                        .bg(cx.theme().colors().elevated_surface_background)
-                        .on_action(cx.listener(|this, _: &menu::Confirm, window, cx| {
+        // Do not wrap in `deferred()` — deferred draws have broken Enter/action
+        // delivery for this overlay under AppShell (focus path / dispatch tree).
+        v_flex()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(gpui::hsla(0., 0., 0., 0.35))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(|_, _, _, cx| {
+                    cx.emit(DismissEvent);
+                }),
+            )
+            .child(
+                v_flex()
+                    .w(px(560.))
+                    .max_h(px(460.))
+                    .occlude()
+                    .track_focus(&self.focus_handle)
+                    .key_context(key_context)
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(cx.theme().colors().border)
+                    .bg(cx.theme().colors().elevated_surface_background)
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        let mods = &event.keystroke.modifiers;
+                        if event.keystroke.key == "enter"
+                            && !mods.control
+                            && !mods.alt
+                            && !mods.platform
+                        {
                             this.confirm(window, cx);
-                        }))
-                        .on_action(cx.listener(|_this, _: &menu::Cancel, _, cx| {
+                            cx.stop_propagation();
+                        } else if event.keystroke.key == "escape" {
                             cx.emit(DismissEvent);
-                        }))
-                        .on_action(cx.listener(|this, _: &menu::SelectNext, _, cx| {
-                            if !this.filtered.is_empty() {
-                                this.selected = (this.selected + 1) % this.filtered.len();
-                                cx.notify();
-                            }
-                        }))
-                        .on_action(cx.listener(|this, _: &menu::SelectPrevious, _, cx| {
-                            if !this.filtered.is_empty() {
-                                this.selected = if this.selected == 0 {
-                                    this.filtered.len() - 1
-                                } else {
-                                    this.selected - 1
-                                };
-                                cx.notify();
-                            }
-                        }))
-                        .child(
-                            h_flex()
-                                .h(px(36.))
-                                .w_full()
-                                .px_2p5()
-                                .flex_none()
-                                .overflow_hidden()
-                                .child(div().flex_1().min_w_0().child(self.query.clone())),
-                        )
-                        .child(
-                            v_flex()
-                                .id("cmd-list")
-                                .flex_1()
-                                .max_h(px(360.))
-                                .overflow_y_scroll()
-                                .gap_0p5()
-                                .p_1()
-                                .children(list),
-                        )
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .p_1p5()
-                                .gap_1()
-                                .justify_end()
-                                .border_t_1()
-                                .border_color(cx.theme().colors().border_variant)
-                                .child(
-                                    Button::new("run-action", "Run")
-                                        .key_binding(focus_for_footer.as_ref().map(|focus| {
-                                            KeyBinding::for_action_in(&menu::Confirm, focus, cx)
-                                                .size(rems_from_px(12.))
-                                        }))
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.confirm(window, cx);
-                                        })),
-                                ),
-                        ),
-                ),
-        )
-        .with_priority(2)
+                            cx.stop_propagation();
+                        }
+                    }))
+                    .on_action(cx.listener(|this, _: &menu::Confirm, window, cx| {
+                        this.confirm(window, cx);
+                    }))
+                    .on_action(cx.listener(|_this, _: &menu::Cancel, _, cx| {
+                        cx.emit(DismissEvent);
+                    }))
+                    .on_action(cx.listener(|this, _: &menu::SelectNext, _, cx| {
+                        if !this.filtered.is_empty() {
+                            this.selected = (this.selected + 1) % this.filtered.len();
+                            cx.notify();
+                        }
+                    }))
+                    .on_action(cx.listener(|this, _: &menu::SelectPrevious, _, cx| {
+                        if !this.filtered.is_empty() {
+                            this.selected = if this.selected == 0 {
+                                this.filtered.len() - 1
+                            } else {
+                                this.selected - 1
+                            };
+                            cx.notify();
+                        }
+                    }))
+                    .child(
+                        h_flex()
+                            .h(px(36.))
+                            .w_full()
+                            .px_2p5()
+                            .flex_none()
+                            .overflow_hidden()
+                            .child(div().flex_1().min_w_0().child(self.query.clone())),
+                    )
+                    .child(
+                        v_flex()
+                            .id("cmd-list")
+                            .flex_1()
+                            .max_h(px(360.))
+                            .overflow_y_scroll()
+                            .gap_0p5()
+                            .p_1()
+                            .children(list),
+                    )
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .p_1p5()
+                            .gap_1()
+                            .justify_end()
+                            .border_t_1()
+                            .border_color(cx.theme().colors().border_variant)
+                            .child(
+                                Button::new("run-action", "Run")
+                                    .key_binding(focus_for_footer.as_ref().map(|focus| {
+                                        KeyBinding::for_action_in(&menu::Confirm, focus, cx)
+                                            .size(rems_from_px(12.))
+                                    }))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.confirm(window, cx);
+                                    })),
+                            ),
+                    ),
+            )
     }
 }
 
@@ -391,6 +493,7 @@ fn panda_entries() -> Vec<(SharedString, Box<dyn gpui::Action>)> {
     let mut entries = vec![
         // Memo
         entry("Memo: New", NewMemo),
+        entry("Memo: Create Journal", CreateJournal),
         entry("Memo: Save", SaveMemo),
         entry("Memo: Delete", DeleteMemo),
         entry("Memo: Refresh", Refresh),
@@ -420,6 +523,8 @@ fn panda_entries() -> Vec<(SharedString, Box<dyn gpui::Action>)> {
         entry("Markdown: Ordered List", ToggleOrderedList),
         entry("Markdown: Task List", ToggleTaskList),
         entry("Markdown: Insert Link", InsertLink),
+        entry("Markdown: Insert Image", InsertImage),
+        entry("Markdown: Insert Table", InsertTable),
         entry("Markdown: Insert Horizontal Rule", InsertHorizontalRule),
         // View
         entry("View: Toggle Navigation", ToggleNavPane),
@@ -445,17 +550,25 @@ impl AppShell {
             return;
         }
         let previous_focus = window.focused(cx);
-        let palette = cx.new(|cx| PandaCommandPalette::new(previous_focus, window, cx));
+        let active_editor = match &self.mode {
+            Mode::Main(main) => main.editor.clone(),
+            Mode::Setup(_) => None,
+        };
+        let palette =
+            cx.new(|cx| PandaCommandPalette::new(previous_focus, active_editor, window, cx));
         self._palette_sub = Some(cx.subscribe(&palette, |this, _, _: &DismissEvent, cx| {
             this.command_palette = None;
             this._palette_sub = None;
             cx.notify();
         }));
-        window.focus(&palette.focus_handle(cx), cx);
-        let query_focus = palette.read(cx).query.focus_handle(cx);
-        window.focus(&query_focus, cx);
-        self.command_palette = Some(palette);
+        // Mount first, then focus on the next painted frame so the query editor is
+        // in the focus tree (focusing before mount leaves focus on the memo editor).
+        self.command_palette = Some(palette.clone());
         cx.notify();
+        cx.on_next_frame(window, move |_, window, cx| {
+            // Focusable returns the query editor — one focus is enough.
+            window.focus(&palette.focus_handle(cx), cx);
+        });
     }
 
     pub(crate) fn open_go_to_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {

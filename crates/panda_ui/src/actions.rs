@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use editor::Editor;
-use gpui::{Context, Entity, Focusable, SharedString, Window, prelude::*, px};
+use editor::{Editor, MultiBufferOffset};
+use gpui::{App, Context, Focusable, SharedString, Window, prelude::*, px};
 use language::{Buffer, language_settings::SoftWrap};
 use panda_core::{
     MemoSummary, NavFilter, SyncState, Todo, TodoFilter, TodoOperation, TodoOperationKind,
@@ -84,7 +84,9 @@ impl AppShell {
         };
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let mut seen_todo_ids = HashSet::new();
-        main.todos
+        let filter = main.todo_filter;
+        let mut todos = main
+            .todos
             .iter()
             .filter(|(todo, _)| {
                 if main.todo_filter == TodoFilter::Trash {
@@ -114,7 +116,16 @@ impl AppShell {
             })
             .filter(|(todo, _)| seen_todo_ids.insert(todo.id.clone()))
             .cloned()
-            .collect()
+            .collect::<Vec<_>>();
+
+        // The all-tasks view is the cross-section where completion state is
+        // most useful as the primary grouping. Keep the existing insertion
+        // order within each group so remote ordering and local optimistic
+        // updates remain stable.
+        if filter == TodoFilter::All {
+            todos.sort_by_key(|(todo, _)| todo.status == TodoStatus::Completed);
+        }
+        todos
     }
 
     pub(crate) fn create_todo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -337,9 +348,10 @@ impl AppShell {
         let title_editor = field_editor(window, cx, &todo.title);
         let note = todo.note.clone();
         let languages = self.languages.clone();
+        let languages_for_buffer = languages.clone();
         let buffer = cx.new(|cx| {
             let buffer = Buffer::local(note, cx);
-            buffer.set_language_registry(languages);
+            buffer.set_language_registry(languages_for_buffer);
             buffer
         });
         let note_editor = cx.new(|cx| {
@@ -356,6 +368,30 @@ impl AppShell {
             editor.set_use_modal_editing(true);
             editor
         });
+        // Markdown is loaded asynchronously. The editor pane is a cached
+        // chrome view, so explicitly invalidate the shell once the language
+        // (and therefore syntax highlighting) is attached.
+        let note_editor_weak = note_editor.downgrade();
+        let shell_weak = cx.entity().downgrade();
+        cx.spawn(async move |_this, cx| {
+            if let Ok(markdown) = languages.language_for_name("Markdown").await {
+                note_editor_weak
+                    .update(cx, |editor, cx| {
+                        editor.buffer().update(cx, |multi_buffer, cx| {
+                            if let Some(buffer) = multi_buffer.as_singleton() {
+                                buffer.update(cx, |buffer, cx| {
+                                    buffer.set_language(Some(markdown), cx);
+                                });
+                            }
+                        });
+                    })
+                    .ok();
+                if let Some(shell) = shell_weak.upgrade() {
+                    shell.update(cx, |_, cx| cx.notify());
+                }
+            }
+        })
+        .detach();
         let due_date_editor =
             field_editor(window, cx, todo.due_date.as_deref().unwrap_or_default());
         let priority_editor = field_editor(window, cx, &todo.priority.to_string());
@@ -530,6 +566,11 @@ impl AppShell {
             preview: None,
             preview_scroll_handle: gpui::ScrollHandle::new(),
             memo_display_mode,
+            heading_menu: None,
+            todo_due_menu: None,
+            todo_priority_menu: None,
+            side_chrome: None,
+            editor_chrome: None,
             status: "Loading...".into(),
             error: None,
             save_generation: 0,
@@ -541,6 +582,7 @@ impl AppShell {
             list_width,
             nav_collapsed,
             collapsed_notebooks: Default::default(),
+            notebook_drop_indicator: None,
             context_menu: None,
             rename_dialog: None,
             _rename_sub: None,
@@ -549,7 +591,7 @@ impl AppShell {
             _search_sub: None,
             _buffer_search_sub: None,
             _buffer_sub: None,
-            _preview_sub: None,
+            _preview_scroll_sub: None,
         });
         if let Mode::Main(main) = &mut self.mode {
             let languages = self.languages.clone();
@@ -566,6 +608,11 @@ impl AppShell {
                 },
             ));
             main.buffer_search_bar = Some(buffer_search_bar);
+
+            let shell = cx.entity();
+            main.side_chrome = Some(cx.new(|cx| crate::chrome::SideChrome::new(shell.clone(), cx)));
+            main.editor_chrome =
+                Some(cx.new(|cx| crate::chrome::EditorChrome::new(shell, cx)));
 
             let search_editor = cx.new(|cx| {
                 let mut editor = Editor::single_line(window, cx);
@@ -935,6 +982,7 @@ impl AppShell {
         let store = main.store.clone();
         let memo_id = id.to_string();
         let languages = self.languages.clone();
+        let shell_weak = cx.entity().downgrade();
 
         cx.spawn_in(window, async move |this, cx| {
             let opened = smol::unblock({
@@ -1032,18 +1080,9 @@ impl AppShell {
                                     this.schedule_preview_update(false, cx);
                                 }
                             }));
-                        main.preview_scroll_handle = gpui::ScrollHandle::new();
-                        main._preview_sub = Some(cx.subscribe_in(
-                            &editor,
-                            window,
-                            |this, editor, event: &editor::EditorEvent, window, cx| {
-                                if matches!(event, editor::EditorEvent::SelectionsChanged { .. }) {
-                                    this.sync_preview_to_editor_selection(editor, window, cx);
-                                }
-                            },
-                        ));
 
                         let editor_weak = editor.downgrade();
+                        let shell_weak = shell_weak.clone();
                         let languages2 = languages.clone();
                         cx.spawn(async move |_this, cx| {
                             if let Ok(md) = languages2.language_for_name("Markdown").await {
@@ -1058,6 +1097,13 @@ impl AppShell {
                                         });
                                     })
                                     .ok();
+                                // EditorChrome is cached to keep Vim cursor
+                                // motion cheap. Invalidate its owner after the
+                                // async language load so syntax highlighting
+                                // is painted in the current frame.
+                                if let Some(shell) = shell_weak.upgrade() {
+                                    shell.update(cx, |_, cx| cx.notify());
+                                }
                             }
                         })
                         .detach();
@@ -1082,6 +1128,19 @@ impl AppShell {
                         main.editor = Some(editor.clone());
                         main.title_editor = Some(title_editor);
                         main.preview = Some(preview);
+                        main.preview_scroll_handle = gpui::ScrollHandle::new();
+                        main._preview_scroll_sub =
+                            Some(cx.subscribe(&editor, |this, _, event, cx| {
+                                if matches!(
+                                    event,
+                                    editor::EditorEvent::ScrollPositionChanged {
+                                        local: true,
+                                        ..
+                                    }
+                                ) {
+                                    this.sync_live_preview_scroll(cx);
+                                }
+                            }));
                         if let Some(bar) = main.buffer_search_bar.clone() {
                             bar.update(cx, |bar, cx| {
                                 bar.set_active_pane_item(Some(&editor), window, cx);
@@ -1193,78 +1252,22 @@ impl AppShell {
         }
     }
 
-    /// Keep the Live/Read Markdown projection scrolled to the editor cursor.
-    /// Mirrors `markdown_preview`'s selection-driven sync: only autoscroll when
-    /// the source editor is focused so manual preview scrolling isn't stolen.
-    fn sync_preview_to_editor_selection(
-        &mut self,
-        editor: &Entity<Editor>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Mode::Main(main) = &self.mode else {
-            return;
-        };
-        if !matches!(
-            main.memo_display_mode,
-            MemoDisplayMode::Live | MemoDisplayMode::Read
-        ) {
-            return;
-        }
-        let Some(preview) = main.preview.clone() else {
-            return;
-        };
-        let (source_index, editor_focused) = editor.update(cx, |editor, cx| {
-            let index = Self::editor_source_index(editor, cx);
-            let focused = editor.focus_handle(cx).is_focused(window);
-            (index, focused)
-        });
-        let Some(source_index) = source_index else {
-            return;
-        };
-        preview.update(cx, |markdown, cx| {
-            markdown.set_active_root_for_source_index(Some(source_index), cx);
-            if editor_focused {
-                markdown.request_autoscroll_to_source_index(source_index, cx);
-            }
-        });
-    }
-
-    fn editor_source_index(editor: &Editor, cx: &mut gpui::App) -> Option<usize> {
-        let display_snapshot = editor.display_snapshot(cx);
-        let source_offset = editor
-            .selections
-            .last::<editor::MultiBufferOffset>(&display_snapshot)
-            .range()
-            .start;
-        let buffer = editor.buffer().read(cx).as_singleton()?;
-        let buffer_id = buffer.read(cx).remote_id();
-        let (buffer_snapshot, buffer_offset) = display_snapshot
-            .buffer_snapshot()
-            .point_to_buffer_offset(source_offset)?;
-        if buffer_snapshot.remote_id() == buffer_id {
-            Some(buffer_offset.0)
-        } else {
-            None
-        }
-    }
-
-    /// Update the rendered projection only when it is actually visible. The
-    /// Markdown component parses whole documents, so coalescing keystrokes here
-    /// keeps the Vim/editor input path independent from preview cost.
+    /// Update the rendered projection when Live/Read is visible. The Markdown
+    /// component parses whole documents, so coalescing keystrokes here keeps
+    /// the Vim/editor input path independent from preview cost.
     fn schedule_preview_update(&mut self, immediate: bool, cx: &mut Context<Self>) {
-        let (generation, preview, editor) = {
+        let (generation, preview) = {
             let Mode::Main(main) = &mut self.mode else {
                 return;
             };
-            if main.memo_display_mode == MemoDisplayMode::Source {
+            if !main.memo_display_mode.shows_preview() {
                 return;
             }
             let Some(preview) = main.preview.clone() else {
                 return;
             };
             main.preview_generation += 1;
-            (main.preview_generation, preview, main.editor.clone())
+            (main.preview_generation, preview)
         };
         cx.spawn(async move |this, cx| {
             if !immediate {
@@ -1274,7 +1277,7 @@ impl AppShell {
                 .read_with(cx, |this, cx| match &this.mode {
                     Mode::Main(main)
                         if main.preview_generation == generation
-                            && main.memo_display_mode != MemoDisplayMode::Source =>
+                            && main.memo_display_mode.shows_preview() =>
                     {
                         main.editor.as_ref().map(|editor| editor.read(cx).text(cx))
                     }
@@ -1283,30 +1286,39 @@ impl AppShell {
                 .ok()
                 .flatten();
             if let Some(source) = source {
-                let source_index = editor.as_ref().and_then(|editor| {
-                    editor.update(cx, |editor, cx| Self::editor_source_index(editor, cx))
-                });
-                let still_previewing = this
-                    .read_with(cx, |this, _| match &this.mode {
-                        Mode::Main(main) => matches!(
-                            main.memo_display_mode,
-                            MemoDisplayMode::Live | MemoDisplayMode::Read
-                        ),
-                        Mode::Setup(_) => false,
-                    })
-                    .unwrap_or(false);
                 preview.update(cx, |markdown, cx| {
                     markdown.replace(SharedString::from(source), cx);
-                    if still_previewing {
-                        if let Some(source_index) = source_index {
-                            markdown.set_active_root_for_source_index(Some(source_index), cx);
-                            markdown.request_autoscroll_to_source_index(source_index, cx);
-                        }
-                    }
                 });
+                this.update(cx, |_, cx| cx.notify()).ok();
             }
         })
         .detach();
+    }
+
+    /// Follow the editor cursor in Live preview only when the editor scrolls.
+    /// Vim j/k inside the visible viewport emits no scroll event, so those
+    /// motions stay off the Markdown/AppShell notify path.
+    fn sync_live_preview_scroll(&mut self, cx: &mut Context<Self>) {
+        let Mode::Main(main) = &self.mode else {
+            return;
+        };
+        if main.memo_display_mode != MemoDisplayMode::Live {
+            return;
+        }
+        let Some(editor) = main.editor.clone() else {
+            return;
+        };
+        let Some(preview) = main.preview.clone() else {
+            return;
+        };
+        let Some(source_index) = editor.update(cx, |editor, cx| editor_source_index(editor, cx))
+        else {
+            return;
+        };
+        preview.update(cx, |markdown, cx| {
+            markdown.set_active_root_for_source_index(Some(source_index), cx);
+            markdown.request_autoscroll_to_source_index(source_index, cx);
+        });
     }
 
     /// Send one save using the latest local etag/markdown. Serializes via `save_in_flight`.
@@ -1745,19 +1757,122 @@ impl AppShell {
                                 main.preview = None;
                                 main._title_sub = None;
                                 main._buffer_sub = None;
-                                main._preview_sub = None;
+                                main._preview_scroll_sub = None;
                                 if let Some(bar) = main.buffer_search_bar.clone() {
                                     bar.update(cx, |bar, cx| {
                                         bar.set_active_pane_item(None, window, cx);
                                     });
                                 }
                             }
-                            main.status = "Deleted".into();
+                            main.status = "Moved to trash".into();
                             this.refresh_remote(window, cx);
                         }
                         Err(e) => {
                             main.error = Some(e.to_string().into());
                             main.status = "Delete failed".into();
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn restore_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Mode::Main(main) = &mut self.mode else {
+            return;
+        };
+        let Some(id) = main.selected_id.clone() else {
+            main.status = "No memo selected".into();
+            cx.notify();
+            return;
+        };
+        let client = main.client.clone();
+        let restored_id = id.clone();
+        main.status = "Restoring...".into();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = smol::unblock(move || client.restore_memo_blocking(&id)).await;
+            this.update_in(cx, |this, window, cx| {
+                if let Mode::Main(main) = &mut this.mode {
+                    match result {
+                        Ok(()) => {
+                            if let Some((memo, _)) =
+                                main.memos.iter_mut().find(|(m, _)| m.id == restored_id)
+                            {
+                                memo.is_deleted = false;
+                            }
+                            main.filter = NavFilter::All;
+                            main.status = "Restored".into();
+                            this.refresh_remote(window, cx);
+                        }
+                        Err(e) => {
+                            main.error = Some(e.to_string().into());
+                            main.status = "Restore failed".into();
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn permanently_delete_selected(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Mode::Main(main) = &mut self.mode else {
+            return;
+        };
+        let Some(id) = main.selected_id.clone() else {
+            main.status = "No memo selected".into();
+            cx.notify();
+            return;
+        };
+        let is_deleted = main
+            .memos
+            .iter()
+            .any(|(m, _)| m.id == id && m.is_deleted);
+        if !is_deleted {
+            return;
+        }
+        let client = main.client.clone();
+        let deleted_id = id.clone();
+        main.status = "Deleting permanently...".into();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = smol::unblock(move || client.delete_memo_blocking(&id, true)).await;
+            this.update_in(cx, |this, window, cx| {
+                if let Mode::Main(main) = &mut this.mode {
+                    match result {
+                        Ok(()) => {
+                            let was_open = main.active.as_ref().is_some_and(|a| a.id == deleted_id)
+                                || main.selected_id.as_ref() == Some(&deleted_id);
+                            main.memos.retain(|(m, _)| m.id != deleted_id);
+                            if was_open {
+                                main.editor = None;
+                                main.active = None;
+                                main.selected_id = None;
+                                main.title_editor = None;
+                                main.preview = None;
+                                main._title_sub = None;
+                                main._buffer_sub = None;
+                                main._preview_scroll_sub = None;
+                                if let Some(bar) = main.buffer_search_bar.clone() {
+                                    bar.update(cx, |bar, cx| {
+                                        bar.set_active_pane_item(None, window, cx);
+                                    });
+                                }
+                            }
+                            main.status = "Permanently deleted".into();
+                            this.refresh_remote(window, cx);
+                        }
+                        Err(e) => {
+                            main.error = Some(e.to_string().into());
+                            main.status = "Permanent delete failed".into();
                         }
                     }
                 }
@@ -1785,11 +1900,7 @@ impl AppShell {
 
     pub(crate) fn toggle_preview(&mut self, cx: &mut Context<Self>) {
         let next = match &self.mode {
-            Mode::Main(main) => match main.memo_display_mode {
-                crate::state::MemoDisplayMode::Source => crate::state::MemoDisplayMode::Live,
-                crate::state::MemoDisplayMode::Live => crate::state::MemoDisplayMode::Read,
-                crate::state::MemoDisplayMode::Read => crate::state::MemoDisplayMode::Source,
-            },
+            Mode::Main(main) => main.memo_display_mode.cycle(),
             Mode::Setup(_) => return,
         };
         self.set_memo_display_mode(next, cx);
@@ -1800,12 +1911,15 @@ impl AppShell {
         mode: crate::state::MemoDisplayMode,
         cx: &mut Context<Self>,
     ) {
-        let should_sync_preview = matches!(mode, MemoDisplayMode::Live | MemoDisplayMode::Read);
+        let should_sync_preview = mode.shows_preview();
         if let Mode::Main(main) = &mut self.mode {
             main.memo_display_mode = mode;
         }
         if should_sync_preview {
             self.schedule_preview_update(true, cx);
+            if mode == MemoDisplayMode::Live {
+                self.sync_live_preview_scroll(cx);
+            }
         }
         cx.notify();
     }
@@ -1965,10 +2079,15 @@ impl AppShell {
         dragged_parent_id: Option<String>,
         target_id: String,
         target_parent_id: Option<String>,
+        side: crate::state::NotebookInsertSide,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Mode::Main(main) = &mut self.mode {
+            main.notebook_drop_indicator = None;
+        }
         if dragged_id == target_id {
+            cx.notify();
             return;
         }
         if dragged_parent_id != target_parent_id {
@@ -1985,28 +2104,38 @@ impl AppShell {
             .notebooks
             .iter()
             .filter(|notebook| !notebook.is_deleted && notebook.parent_id == target_parent_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        siblings.sort_by(|a, b| {
+            a.sort_order
+                .cmp(&b.sort_order)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        let mut sibling_ids = siblings
+            .iter()
             .map(|notebook| notebook.id.clone())
             .collect::<Vec<_>>();
-        siblings.sort_by_key(|id| {
-            main.notebooks
-                .iter()
-                .find(|notebook| &notebook.id == id)
-                .map(|notebook| notebook.sort_order)
-                .unwrap_or_default()
-        });
-        let Some(from) = siblings.iter().position(|id| id == &dragged_id) else {
+        sibling_ids.retain(|id| id != &dragged_id);
+        let Some(target_pos) = sibling_ids.iter().position(|id| id == &target_id) else {
             return;
         };
-        let Some(to) = siblings.iter().position(|id| id == &target_id) else {
-            return;
+        let insert_at = match side {
+            crate::state::NotebookInsertSide::Before => target_pos,
+            crate::state::NotebookInsertSide::After => target_pos + 1,
         };
-        let moved = siblings.remove(from);
-        siblings.insert(to, moved);
+        sibling_ids.insert(insert_at, dragged_id);
+        // Optimistic local order so the nav updates before the round-trip.
+        for (sort_order, id) in sibling_ids.iter().enumerate() {
+            if let Some(notebook) = main.notebooks.iter_mut().find(|notebook| &notebook.id == id) {
+                notebook.sort_order = sort_order as i32;
+            }
+        }
         let client = main.client.clone();
         main.status = "Reordering folders...".into();
+        cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let result = smol::unblock(move || {
-                client.reorder_notebooks_blocking(target_parent_id.as_deref(), &siblings)
+                client.reorder_notebooks_blocking(target_parent_id.as_deref(), &sibling_ids)
             })
             .await;
             this.update_in(cx, |this, _window, cx| {
@@ -2028,6 +2157,25 @@ impl AppShell {
             .ok();
         })
         .detach();
+    }
+
+    pub(crate) fn set_notebook_drop_indicator(
+        &mut self,
+        indicator: Option<crate::state::NotebookDropIndicator>,
+        cx: &mut Context<Self>,
+    ) {
+        let Mode::Main(main) = &mut self.mode else {
+            return;
+        };
+        if main.notebook_drop_indicator == indicator {
+            return;
+        }
+        main.notebook_drop_indicator = indicator;
+        cx.notify();
+    }
+
+    pub(crate) fn clear_notebook_drop_indicator(&mut self, cx: &mut Context<Self>) {
+        self.set_notebook_drop_indicator(None, cx);
     }
 
     pub(crate) fn create_notebook(
@@ -2563,5 +2711,24 @@ impl AppShell {
         self.schedule_save(&memo_id, cx);
         cx.notify();
         true
+    }
+}
+
+fn editor_source_index(editor: &Editor, cx: &mut App) -> Option<usize> {
+    let display_snapshot = editor.display_snapshot(cx);
+    let source_offset = editor
+        .selections
+        .last::<MultiBufferOffset>(&display_snapshot)
+        .range()
+        .start;
+    let buffer = editor.buffer().read(cx).as_singleton()?;
+    let buffer_id = buffer.read(cx).remote_id();
+    let (buffer_snapshot, buffer_offset) = display_snapshot
+        .buffer_snapshot()
+        .point_to_buffer_offset(source_offset)?;
+    if buffer_snapshot.remote_id() == buffer_id {
+        Some(buffer_offset.0)
+    } else {
+        None
     }
 }

@@ -4,6 +4,7 @@ mod about_window;
 mod action_handlers;
 mod actions;
 mod app_menu;
+mod chrome;
 mod command_palette;
 mod editor_pane;
 mod format_toolbar;

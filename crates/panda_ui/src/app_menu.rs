@@ -1,7 +1,8 @@
 //! Client-side File/Edit/View/Help menu strip (Zed ApplicationMenu lite).
 
 use gpui::{
-    App, Context, Entity, FocusHandle, OwnedMenu, OwnedMenuItem, Render, Window, div, prelude::*,
+    App, Context, Entity, FocusHandle, MouseButton, OwnedMenu, OwnedMenuItem, Render, Window, div,
+    prelude::*,
 };
 use smallvec::SmallVec;
 use ui::{
@@ -88,7 +89,14 @@ impl Render for AppMenuBar {
         let action_context = self.action_context.clone();
         h_flex()
             .id("panda-app-menu-bar")
+            // The whole title bar is a Windows drag region. Keep menu clicks
+            // inside the menu instead of letting them start a window move.
+            .h_full()
+            .items_center()
             .gap_0p5()
+            .flex_none()
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .children(self.entries.iter().map(|entry| {
                 let handle = entry.handle.clone();
                 let menu_name = entry.menu.name.clone();
@@ -96,7 +104,8 @@ impl Render for AppMenuBar {
                 let action_context = action_context.clone();
                 div()
                     .id(SharedString::from(format!("menu-{menu_name}")))
-                    .occlude()
+                    .h_full()
+                    .flex_none()
                     .child(
                         PopoverMenu::new(SharedString::from(format!("popover-{menu_name}")))
                             .menu(move |window, cx| {

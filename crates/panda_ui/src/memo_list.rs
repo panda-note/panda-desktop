@@ -90,6 +90,7 @@ impl AppShell {
                 tags: memo_tags,
                 notebook_name: None,
                 is_pinned: memo.is_pinned,
+                updated_at: Some(memo.updated_at.clone()),
                 highlight_query: None,
             };
             list =
@@ -153,6 +154,7 @@ impl AppShell {
             let id = todo.id.clone();
             let complete_id = id.clone();
             let selected_id = id.clone();
+            let menu_id = id.clone();
             let done = todo.status == panda_core::TodoStatus::Completed;
             let due = todo.due_date.clone().unwrap_or_default();
             let priority = todo.priority.clamp(0, 3);
@@ -167,6 +169,18 @@ impl AppShell {
                         this.bg(cx.theme().colors().ghost_element_selected)
                     })
                     .hover(|style| style.bg(cx.theme().colors().ghost_element_hover))
+                    .on_mouse_down(gpui::MouseButton::Right, {
+                        let entity = cx.weak_entity();
+                        move |event: &gpui::MouseDownEvent, window, cx| {
+                            let position = event.position;
+                            let menu_id = menu_id.clone();
+                            entity
+                                .update(cx, |this, cx| {
+                                    this.deploy_todo_menu(menu_id, position, window, cx);
+                                })
+                                .ok();
+                        }
+                    })
                     .child(
                         h_flex()
                             .w_full()
@@ -253,6 +267,72 @@ impl AppShell {
         list.into_any_element()
     }
 
+    pub(crate) fn deploy_todo_menu(
+        &mut self,
+        todo_id: String,
+        position: gpui::Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Mode::Main(main) = &mut self.mode {
+            main.selected_todo_id = Some(todo_id.clone());
+        }
+        let in_trash = matches!(
+            &self.mode,
+            Mode::Main(main) if main.todo_filter == panda_core::TodoFilter::Trash
+        );
+        let entity = cx.weak_entity();
+        let menu = ContextMenu::build(window, cx, move |menu, _, _| {
+            let entity = entity.clone();
+            let id = todo_id.clone();
+            if in_trash {
+                menu.entry("Restore", None, {
+                    let entity = entity.clone();
+                    let id = id.clone();
+                    move |window, cx| {
+                        entity
+                            .update(cx, |this, cx| {
+                                if let Mode::Main(main) = &mut this.mode {
+                                    main.selected_todo_id = Some(id.clone());
+                                }
+                                this.restore_selected_todo(window, cx);
+                            })
+                            .ok();
+                    }
+                })
+                .separator()
+                .entry("Delete permanently", None, {
+                    let entity = entity.clone();
+                    move |window, cx| {
+                        entity
+                            .update(cx, |this, cx| {
+                                if let Mode::Main(main) = &mut this.mode {
+                                    main.selected_todo_id = Some(id.clone());
+                                }
+                                this.permanently_delete_selected_todo(window, cx);
+                            })
+                            .ok();
+                    }
+                })
+            } else {
+                menu.entry("Delete", None, {
+                    let entity = entity.clone();
+                    move |window, cx| {
+                        entity
+                            .update(cx, |this, cx| {
+                                if let Mode::Main(main) = &mut this.mode {
+                                    main.selected_todo_id = Some(id.clone());
+                                }
+                                this.delete_selected_todo(window, cx);
+                            })
+                            .ok();
+                    }
+                })
+            }
+        });
+        self.set_context_menu(menu, position, window, cx);
+    }
+
     pub(crate) fn deploy_memo_menu(
         &mut self,
         memo_id: String,
@@ -263,6 +343,10 @@ impl AppShell {
         if let Mode::Main(main) = &mut self.mode {
             main.selected_id = Some(memo_id.clone());
         }
+        let in_trash = matches!(
+            &self.mode,
+            Mode::Main(main) if matches!(main.filter, NavFilter::Trash)
+        );
         let entity = cx.weak_entity();
         let pinned = matches!(
             &self.mode,
@@ -275,43 +359,75 @@ impl AppShell {
         let pin_label = if pinned { "Unpin" } else { "Pin" };
         let menu = ContextMenu::build(window, cx, move |menu, _, _| {
             let entity = entity.clone();
-            let id_rename = memo_id.clone();
-            let id_delete = memo_id.clone();
-            let id_pin = memo_id.clone();
-            menu.entry(pin_label, None, {
-                let entity = entity.clone();
-                move |window, cx| {
-                    entity
-                        .update(cx, |this, cx| {
-                            this.toggle_pin_memo(id_pin.clone(), window, cx);
-                        })
-                        .ok();
-                }
-            })
-            .entry("Rename", None, {
-                let entity = entity.clone();
-                move |window, cx| {
-                    entity
-                        .update(cx, |this, cx| {
-                            this.begin_rename_memo(id_rename.clone(), window, cx);
-                        })
-                        .ok();
-                }
-            })
-            .separator()
-            .entry("Delete", None, {
-                let entity = entity.clone();
-                move |window, cx| {
-                    entity
-                        .update(cx, |this, cx| {
-                            if let Mode::Main(main) = &mut this.mode {
-                                main.selected_id = Some(id_delete.clone());
-                            }
-                            this.delete_selected(window, cx);
-                        })
-                        .ok();
-                }
-            })
+            let id = memo_id.clone();
+            if in_trash {
+                menu.entry("Restore", None, {
+                    let entity = entity.clone();
+                    let id = id.clone();
+                    move |window, cx| {
+                        entity
+                            .update(cx, |this, cx| {
+                                if let Mode::Main(main) = &mut this.mode {
+                                    main.selected_id = Some(id.clone());
+                                }
+                                this.restore_selected(window, cx);
+                            })
+                            .ok();
+                    }
+                })
+                .separator()
+                .entry("Delete permanently", None, {
+                    let entity = entity.clone();
+                    move |window, cx| {
+                        entity
+                            .update(cx, |this, cx| {
+                                if let Mode::Main(main) = &mut this.mode {
+                                    main.selected_id = Some(id.clone());
+                                }
+                                this.permanently_delete_selected(window, cx);
+                            })
+                            .ok();
+                    }
+                })
+            } else {
+                let id_rename = id.clone();
+                let id_delete = id.clone();
+                let id_pin = id;
+                menu.entry(pin_label, None, {
+                    let entity = entity.clone();
+                    move |window, cx| {
+                        entity
+                            .update(cx, |this, cx| {
+                                this.toggle_pin_memo(id_pin.clone(), window, cx);
+                            })
+                            .ok();
+                    }
+                })
+                .entry("Rename", None, {
+                    let entity = entity.clone();
+                    move |window, cx| {
+                        entity
+                            .update(cx, |this, cx| {
+                                this.begin_rename_memo(id_rename.clone(), window, cx);
+                            })
+                            .ok();
+                    }
+                })
+                .separator()
+                .entry("Delete", None, {
+                    let entity = entity.clone();
+                    move |window, cx| {
+                        entity
+                            .update(cx, |this, cx| {
+                                if let Mode::Main(main) = &mut this.mode {
+                                    main.selected_id = Some(id_delete.clone());
+                                }
+                                this.delete_selected(window, cx);
+                            })
+                            .ok();
+                    }
+                })
+            }
         });
         self.set_context_menu(menu, position, window, cx);
     }

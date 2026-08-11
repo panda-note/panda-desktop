@@ -1,9 +1,11 @@
 //! Lightweight Settings window (not Zed settings_ui).
 
-use editor::EditorSettings;
+use std::sync::Arc;
+
+use editor::{Editor, EditorSettings};
 use gpui::{
-    App, Bounds, Context, Entity, FocusHandle, Focusable, TitlebarOptions, UpdateGlobal, Window,
-    WindowBounds, WindowHandle, WindowOptions, point, prelude::*, px, size,
+    AnyElement, App, Bounds, Context, Entity, FocusHandle, Focusable, TitlebarOptions,
+    UpdateGlobal, Window, WindowBounds, WindowHandle, WindowOptions, point, prelude::*, px, size,
 };
 use platform_title_bar::PlatformTitleBar;
 use settings::{Settings, SettingsStore};
@@ -14,6 +16,7 @@ use vim_mode_setting::VimModeSetting;
 use workspace::client_side_decorations;
 
 use panda_session::app_data_dir;
+use panda_store::LocalStore;
 
 use crate::shell::AppShell;
 
@@ -25,13 +28,24 @@ struct PandaPrefs {
     theme: String,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingsSection {
+    General,
+    Appearance,
+    Editor,
+    Advanced,
+}
+
 pub struct SettingsWindow {
     title_bar: Option<Entity<PlatformTitleBar>>,
     focus_handle: FocusHandle,
+    store: Arc<LocalStore>,
+    journal_folder: Entity<Editor>,
+    section: SettingsSection,
 }
 
 impl SettingsWindow {
-    pub fn open(cx: &mut App) {
+    pub fn open(store: Arc<LocalStore>, cx: &mut App) {
         if let Some(existing) = cx
             .windows()
             .into_iter()
@@ -50,7 +64,7 @@ impl SettingsWindow {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
                         None,
-                        size(px(480.), px(540.)),
+                        size(px(760.), px(600.)),
                         cx,
                     ))),
                     titlebar: Some(TitlebarOptions {
@@ -64,12 +78,12 @@ impl SettingsWindow {
                     kind: gpui::WindowKind::Normal,
                     ..Default::default()
                 },
-                |window, cx| cx.new(|cx| SettingsWindow::new(window, cx)),
+                |window, cx| cx.new(|cx| SettingsWindow::new(store, window, cx)),
             );
         });
     }
 
-    fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(store: Arc<LocalStore>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let title_bar = Some(cx.new(|cx| PlatformTitleBar::new("settings-title-bar", cx)));
         if let Some(bar) = &title_bar {
             bar.update(cx, |bar, _| {
@@ -81,9 +95,27 @@ impl SettingsWindow {
                 ]);
             });
         }
+        let journal_folder = cx.new(|cx| {
+            let mut editor = Editor::single_line(window, cx);
+            editor.set_text(
+                store
+                    .get_meta("journal_folder")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "Journal".into()),
+                window,
+                cx,
+            );
+            editor.set_show_gutter(false, cx);
+            editor.set_placeholder_text("Journal", window, cx);
+            editor
+        });
         Self {
             title_bar,
             focus_handle: cx.focus_handle(),
+            store,
+            journal_folder,
+            section: SettingsSection::General,
         }
     }
 
@@ -180,6 +212,118 @@ impl SettingsWindow {
         // window, including the editor syntax theme, without recreating it.
         cx.notify();
     }
+
+    fn select_section(&mut self, section: SettingsSection, cx: &mut Context<Self>) {
+        self.section = section;
+        cx.notify();
+    }
+
+    fn save_journal_folder(&mut self, cx: &mut Context<Self>) {
+        let path = self.journal_folder.read(cx).text(cx).trim().to_string();
+        if !path.is_empty() {
+            let _ = self.store.set_meta("journal_folder", &path);
+        }
+        cx.notify();
+    }
+
+    fn render_section(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let prefs = Self::current_prefs(cx);
+        match self.section {
+            SettingsSection::General => v_flex()
+                .gap_4()
+                .child(Label::new("General").size(LabelSize::Large))
+                .child(
+                    Label::new("Journal")
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                )
+                .child(
+                    Label::new("Journal folder")
+                        .size(LabelSize::Default),
+                )
+                .child(
+                    Label::new("The Create Journal command makes YYYY/MM folders below this location and opens a YYYYMMDD note.")
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                )
+                .child(
+                    div()
+                        .h(px(34.))
+                        .w_full()
+                        .border_1()
+                        .border_color(cx.theme().colors().border)
+                        .rounded_md()
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .child(self.journal_folder.clone()),
+                )
+                .child(
+                    Button::new("save-journal-folder", "Save Journal Location")
+                        .on_click(cx.listener(|this, _, _, cx| this.save_journal_folder(cx))),
+                )
+                .into_any_element(),
+            SettingsSection::Appearance => v_flex()
+                .gap_4()
+                .child(Label::new("Appearance").size(LabelSize::Large))
+                .child(
+                    Label::new("Theme")
+                        .size(LabelSize::Default),
+                )
+                .child(
+                    Label::new("Choose the color theme used throughout Panda Note.")
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                )
+                .child(DropdownMenu::new(
+                    "settings-theme",
+                    prefs.theme.clone(),
+                    theme_menu(window, cx),
+                ))
+                .into_any_element(),
+            SettingsSection::Editor => v_flex()
+                .gap_3()
+                .child(Label::new("Editor").size(LabelSize::Large))
+                .child(SwitchField::new(
+                    "toggle-vim",
+                    Some("Vim mode"),
+                    Some("Enable modal editing. Restart Panda Note after changing this.".into()),
+                    if prefs.vim { ToggleState::Selected } else { ToggleState::Unselected },
+                    cx.listener(|this, state, _window, cx| this.toggle_vim(state, cx)),
+                ))
+                .child(Divider::horizontal())
+                .child(SwitchField::new(
+                    "toggle-line-numbers",
+                    Some("Show line numbers"),
+                    Some("Show line numbers in the editor gutter.".into()),
+                    if prefs.line_numbers { ToggleState::Selected } else { ToggleState::Unselected },
+                    cx.listener(|this, state, _window, cx| this.toggle_line_numbers(state, cx)),
+                ))
+                .child(SwitchField::new(
+                    "toggle-breakpoints",
+                    Some("Show breakpoints"),
+                    Some("Show breakpoints in the gutter.".into()),
+                    if prefs.breakpoints { ToggleState::Selected } else { ToggleState::Unselected },
+                    cx.listener(|this, state, _window, cx| this.toggle_breakpoints(state, cx)),
+                ))
+                .into_any_element(),
+            SettingsSection::Advanced => v_flex()
+                .gap_4()
+                .child(Label::new("Advanced").size(LabelSize::Large))
+                .child(Label::new("Storage").size(LabelSize::Default))
+                .child(
+                    Label::new(format!(
+                        "Data directory:\n{}",
+                        app_data_dir()
+                            .map(|path| path.display().to_string())
+                            .unwrap_or_else(|_| "(unknown)".into())
+                    ))
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+                )
+                .into_any_element(),
+        }
+    }
 }
 
 impl Focusable for SettingsWindow {
@@ -189,92 +333,66 @@ impl Focusable for SettingsWindow {
 }
 
 impl Render for SettingsWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let prefs = Self::current_prefs(cx);
-        let data_dir = app_data_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "(unknown)".into());
-
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let section = self.section;
+        let navigation = [
+            (SettingsSection::General, "General", "settings-general"),
+            (
+                SettingsSection::Appearance,
+                "Appearance",
+                "settings-appearance",
+            ),
+            (SettingsSection::Editor, "Editor", "settings-editor"),
+            (SettingsSection::Advanced, "Advanced", "settings-advanced"),
+        ];
         v_flex()
             .size_full()
             .text_color(cx.theme().colors().text)
             .children(self.title_bar.clone())
             .child(
-                v_flex()
+                h_flex()
                     .flex_1()
-                    .p_4()
-                    .gap_4()
                     .bg(cx.theme().colors().editor_background)
-                    .child(Label::new("Settings").size(LabelSize::Large))
                     .child(
-                        Label::new("Panda Note v0.1.0")
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
+                        v_flex()
+                            .w(px(180.))
+                            .h_full()
+                            .p_3()
+                            .gap_1()
+                            .border_r_1()
+                            .border_color(cx.theme().colors().border)
+                            .bg(cx.theme().colors().panel_background)
+                            .child(Label::new("Settings").size(LabelSize::Default).mb_2())
+                            .children(navigation.into_iter().map(|(item, label, id)| {
+                                div()
+                                    .id(id)
+                                    .w_full()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .when(section == item, |this| {
+                                        this.bg(cx.theme().colors().ghost_element_selected)
+                                    })
+                                    .hover(|this| this.bg(cx.theme().colors().ghost_element_hover))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.select_section(item, cx);
+                                    }))
+                                    .child(Label::new(label).size(LabelSize::Small))
+                            })),
                     )
-                    .child(Divider::horizontal())
-                    .child(Label::new("Appearance").size(LabelSize::Default))
                     .child(
-                        Label::new("Theme")
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
-                    )
-                    .child(DropdownMenu::new(
-                        "settings-theme",
-                        prefs.theme.clone(),
-                        theme_menu(_window, cx),
-                    ))
-                    .child(Divider::horizontal())
-                    .child(SwitchField::new(
-                        "toggle-vim",
-                        Some("Vim mode"),
-                        Some(
-                            "Enable modal editing. Restart Panda Note after changing this.".into(),
-                        ),
-                        if prefs.vim {
-                            ToggleState::Selected
-                        } else {
-                            ToggleState::Unselected
-                        },
-                        cx.listener(|this, state, _window, cx| {
-                            this.toggle_vim(state, cx);
-                        }),
-                    ))
-                    .child(Divider::horizontal())
-                    .child(Label::new("Editor Gutter").size(LabelSize::Default))
-                    .child(SwitchField::new(
-                        "toggle-line-numbers",
-                        Some("Show line numbers"),
-                        Some("Show line numbers in the editor gutter.".into()),
-                        if prefs.line_numbers {
-                            ToggleState::Selected
-                        } else {
-                            ToggleState::Unselected
-                        },
-                        cx.listener(|this, state, _window, cx| {
-                            this.toggle_line_numbers(state, cx);
-                        }),
-                    ))
-                    .child(SwitchField::new(
-                        "toggle-breakpoints",
-                        Some("Show breakpoints"),
-                        Some("Show breakpoints in the gutter.".into()),
-                        if prefs.breakpoints {
-                            ToggleState::Selected
-                        } else {
-                            ToggleState::Unselected
-                        },
-                        cx.listener(|this, state, _window, cx| {
-                            this.toggle_breakpoints(state, cx);
-                        }),
-                    ))
-                    .child(Divider::horizontal())
-                    .child(
-                        Label::new(format!("Data directory:\n{data_dir}"))
-                            .size(LabelSize::XSmall)
-                            .color(Color::Muted),
+                        v_flex()
+                            .id("settings-content")
+                            .flex_1()
+                            .h_full()
+                            .overflow_y_scroll()
+                            .p_6()
+                            .max_w(px(760.))
+                            .child(self.render_section(window, cx)),
                     ),
             )
-            .map(|root| client_side_decorations(root, _window, cx))
+            .map(|root| client_side_decorations(root, window, cx))
     }
 }
 
@@ -284,6 +402,7 @@ fn theme_menu(window: &mut Window, cx: &mut Context<SettingsWindow>) -> Entity<C
         "One Light",
         "Ayu Dark",
         "Ayu Light",
+        "Ayu Mirage",
         "Gruvbox Dark",
         "Gruvbox Dark Hard",
         "Gruvbox Dark Soft",

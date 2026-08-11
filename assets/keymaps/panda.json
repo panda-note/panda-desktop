@@ -33,6 +33,9 @@
       "alt-shift-1": "markdown::ToggleHeading1",
       "alt-shift-2": "markdown::ToggleHeading2",
       "alt-shift-3": "markdown::ToggleHeading3",
+      "alt-shift-4": "markdown::ToggleHeading4",
+      "alt-shift-5": "markdown::ToggleHeading5",
+      "alt-shift-6": "markdown::ToggleHeading6",
       "ctrl-alt-b": "markdown::ToggleBold",
       "ctrl-alt-shift-i": "markdown::ToggleItalic",
       "ctrl-alt-x": "markdown::ToggleStrikethrough",
@@ -43,6 +46,8 @@
       "ctrl-alt-o": "markdown::ToggleOrderedList",
       "ctrl-alt-t": "markdown::ToggleTaskList",
       "ctrl-alt-k": "markdown::InsertLink",
+      "ctrl-alt-shift-k": "markdown::InsertImage",
+      "ctrl-alt-shift-t": "markdown::InsertTable",
       "ctrl-alt-minus": "markdown::InsertHorizontalRule"
     }
   }
