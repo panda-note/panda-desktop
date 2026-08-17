@@ -135,11 +135,15 @@ impl AppShell {
         if main.todo_create_in_flight {
             return;
         }
+        main.workspace_mode = WorkspaceMode::Todos;
+        if main.todo_filter == TodoFilter::Trash {
+            main.todo_filter = TodoFilter::Inbox;
+        }
         main.todo_create_in_flight = true;
         let now = chrono::Utc::now().to_rfc3339();
         let todo = Todo {
             id: Uuid::new_v4().to_string(),
-            title: "New task".into(),
+            title: "Untitled".into(),
             note: String::new(),
             status: TodoStatus::Inbox,
             due_date: None,
@@ -161,6 +165,34 @@ impl AppShell {
         self.open_todo(&todo_id, window, cx);
         self.refresh_remote(window, cx);
         cx.notify();
+        // Title lives in cached editor chrome — focus after the next paint so
+        // the editor is mounted, then select the default "Untitled" title.
+        cx.defer_in(window, |this, window, cx| {
+            this.focus_todo_title(window, cx);
+        });
+    }
+
+    pub(crate) fn focus_todo_title(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(title) = (match &self.mode {
+            Mode::Main(main) => main.todo_title_editor.clone(),
+            Mode::Setup(_) => None,
+        }) else {
+            return;
+        };
+        title.update(cx, |editor, cx| {
+            editor.select_all(&editor::actions::SelectAll, window, cx);
+        });
+        window.focus(&title.focus_handle(cx), cx);
+    }
+
+    pub(crate) fn focus_todo_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(note) = (match &self.mode {
+            Mode::Main(main) => main.todo_note_editor.clone(),
+            Mode::Setup(_) => None,
+        }) else {
+            return;
+        };
+        window.focus(&note.focus_handle(cx), cx);
     }
 
     pub(crate) fn toggle_todo(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -395,14 +427,56 @@ impl AppShell {
         let due_date_editor =
             field_editor(window, cx, todo.due_date.as_deref().unwrap_or_default());
         let priority_editor = field_editor(window, cx, &todo.priority.to_string());
+        let title_sub = cx.subscribe(&title_editor, |this, _, event, cx| {
+            if matches!(
+                event,
+                editor::EditorEvent::BufferEdited | editor::EditorEvent::Edited { .. }
+            ) {
+                this.schedule_todo_save(cx);
+            }
+        });
+        let note_sub = cx.subscribe(&note_editor, |this, _, event, cx| {
+            if matches!(
+                event,
+                editor::EditorEvent::BufferEdited | editor::EditorEvent::Edited { .. }
+            ) {
+                this.schedule_todo_save(cx);
+            }
+        });
         if let Mode::Main(main) = &mut self.mode {
+            // Drop any pending debounce from the previously open task.
+            main.todo_save_generation += 1;
             main.selected_todo_id = Some(todo.id);
             main.todo_title_editor = Some(title_editor);
             main.todo_note_editor = Some(note_editor);
             main.todo_due_date_editor = Some(due_date_editor);
             main.todo_priority_editor = Some(priority_editor);
+            main._todo_title_sub = Some(title_sub);
+            main._todo_note_sub = Some(note_sub);
         }
         cx.notify();
+    }
+
+    pub(crate) fn schedule_todo_save(&mut self, cx: &mut Context<Self>) {
+        let Mode::Main(main) = &mut self.mode else {
+            return;
+        };
+        main.todo_save_generation += 1;
+        let generation = main.todo_save_generation;
+        cx.spawn(async move |this, cx| {
+            smol::Timer::after(Duration::from_millis(500)).await;
+            this.update_in(cx, |this, window, cx| {
+                let Mode::Main(main) = &this.mode else {
+                    return;
+                };
+                if main.todo_save_generation != generation {
+                    return;
+                }
+                this.save_todo(window, cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(crate) fn save_todo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -430,6 +504,13 @@ impl AppShell {
             if let Ok(priority) = editor.read(cx).text(cx).trim().parse::<i64>() {
                 todo.priority = priority.clamp(0, 3);
             }
+        }
+        if todo.title == existing.title
+            && todo.note == existing.note
+            && todo.due_date == existing.due_date
+            && todo.priority == existing.priority
+        {
+            return;
         }
         let original_revision = todo.revision;
         let original_etag = todo.etag.clone();
@@ -475,6 +556,7 @@ impl AppShell {
         editor.update(cx, |editor, cx| {
             editor.set_text(due_date.unwrap_or_default(), window, cx);
         });
+        self.schedule_todo_save(cx);
         cx.notify();
     }
 
@@ -493,6 +575,7 @@ impl AppShell {
         editor.update(cx, |editor, cx| {
             editor.set_text(priority.to_string(), window, cx);
         });
+        self.schedule_todo_save(cx);
         cx.notify();
     }
     pub(crate) fn blank_setup(window: &mut Window, cx: &mut Context<Self>) -> SetupState {
@@ -592,6 +675,9 @@ impl AppShell {
             _buffer_search_sub: None,
             _buffer_sub: None,
             _preview_scroll_sub: None,
+            todo_save_generation: 0,
+            _todo_title_sub: None,
+            _todo_note_sub: None,
         });
         if let Mode::Main(main) = &mut self.mode {
             let languages = self.languages.clone();
@@ -1560,6 +1646,10 @@ impl AppShell {
     }
 
     pub(crate) fn create_memo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(&self.mode, Mode::Main(main) if main.workspace_mode == WorkspaceMode::Todos) {
+            self.create_todo(window, cx);
+            return;
+        }
         let Mode::Main(main) = &mut self.mode else {
             return;
         };

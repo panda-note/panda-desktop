@@ -1,11 +1,11 @@
 use gpui::{AnyElement, Context, Focusable, SharedString, Window, div, prelude::*, px};
-use panda_core::NavFilter;
+use panda_core::{NavFilter, TodoFilter};
 use theme::ActiveTheme;
 use ui::prelude::*;
 use ui::{ContextMenu, KeyBinding};
 
 use crate::memo_card::{MemoCardData, memo_list_item};
-use crate::panda_actions::NewMemo;
+use crate::panda_actions::{NewMemo, NewTodo};
 use crate::shell::AppShell;
 use crate::state::{DraggedMemo, Mode, WorkspaceMode};
 
@@ -135,6 +135,7 @@ impl AppShell {
         };
         let width = main.list_width;
         let selected = main.selected_todo_id.clone();
+        let in_trash = main.todo_filter == TodoFilter::Trash;
         let todos = self.visible_todos();
         let mut list = v_flex()
             .w(width)
@@ -146,8 +147,38 @@ impl AppShell {
             .p_2()
             .gap_1();
         if todos.is_empty() {
+            let focus = self.focus_handle(cx);
+            let new_todo_binding = KeyBinding::for_action_in(&NewTodo, &focus, cx);
+            let empty_label = if in_trash {
+                "Trash is empty"
+            } else {
+                "No tasks"
+            };
             return list
-                .child(Label::new("No tasks").color(Color::Muted))
+                .justify_center()
+                .items_center()
+                .child(
+                    v_flex()
+                        .w(px(180.))
+                        .max_w_full()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            Label::new(empty_label)
+                                .size(LabelSize::Small)
+                                .color(Color::Muted),
+                        )
+                        .when(!in_trash, |this| {
+                            this.child(
+                                Button::new("list-empty-new-todo", "New Task")
+                                    .full_width()
+                                    .key_binding(new_todo_binding)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.create_todo(window, cx);
+                                    })),
+                            )
+                        }),
+                )
                 .into_any_element();
         }
         for (todo, _) in todos {

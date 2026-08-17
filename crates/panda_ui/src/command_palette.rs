@@ -17,8 +17,8 @@ use ui::prelude::*;
 use ui::{Button, KeyBinding, ListItem, ListItemSpacing};
 
 use crate::panda_actions::{
-    CreateJournal, DeleteMemo, FormatMemo, GoToLine, NewMemo, OpenInstances, OpenSettings, Quit,
-    Refresh, SaveMemo, ToggleNavPane, TogglePreview, ToggleStatusBar,
+    CreateJournal, DeleteMemo, FormatMemo, GoToLine, NewMemo, NewTodo, OpenInstances, OpenSettings,
+    Quit, Refresh, SaveMemo, ToggleNavPane, TogglePreview, ToggleStatusBar,
 };
 use crate::shell::AppShell;
 use crate::state::Mode;
@@ -497,6 +497,8 @@ fn panda_entries() -> Vec<(SharedString, Box<dyn gpui::Action>)> {
         entry("Memo: Save", SaveMemo),
         entry("Memo: Delete", DeleteMemo),
         entry("Memo: Refresh", Refresh),
+        // Todo
+        entry("Todo: New", NewTodo),
         // Navigate
         entry("Navigate: Go to Line…", GoToLine),
         // Editor

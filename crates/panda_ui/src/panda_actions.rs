@@ -13,6 +13,8 @@ actions!(
         OpenAbout,
         /// Create a new memo in the active notebook.
         NewMemo,
+        /// Create a new todo in the todos workspace.
+        NewTodo,
         /// Create or open today's journal memo.
         CreateJournal,
         /// Delete the selected memo.
@@ -48,6 +50,7 @@ pub fn app_menus() -> Vec<gpui::Menu> {
             disabled: false,
             items: vec![
                 MenuItem::action("New Memo", NewMemo),
+                MenuItem::action("New Task", NewTodo),
                 MenuItem::action("Create Journal", CreateJournal),
                 MenuItem::action("Save Memo", SaveMemo),
                 MenuItem::action("Delete Memo", DeleteMemo),

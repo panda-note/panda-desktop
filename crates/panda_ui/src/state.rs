@@ -253,6 +253,9 @@ pub(crate) struct MainState {
     pub _buffer_sub: Option<Subscription>,
     /// Live preview scroll sync — listens for editor scroll, not selection motion.
     pub _preview_scroll_sub: Option<Subscription>,
+    pub todo_save_generation: u64,
+    pub _todo_title_sub: Option<Subscription>,
+    pub _todo_note_sub: Option<Subscription>,
 }
 
 impl MainState {

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, MouseButton, SharedString, Subscription, Window,
-    anchored, deferred, div, prelude::*, px,
+    App, Context, Entity, FocusHandle, Focusable, KeyContext, MouseButton, SharedString,
+    Subscription, Window, anchored, deferred, div, prelude::*, px,
 };
 use language::LanguageRegistry;
 use panda_session::SessionStore;
@@ -165,6 +165,11 @@ impl Render for AppShell {
         // when AppShell is re-rendered via the ancestor dirty walk without notify.
         self.sync_title_bar(cx);
 
+        let todo_workspace = matches!(
+            &self.mode,
+            Mode::Main(main) if main.workspace_mode == crate::state::WorkspaceMode::Todos
+        );
+
         let content = match &self.mode {
             Mode::Setup(_) => self.render_setup(window, cx),
             Mode::Main(main) => {
@@ -326,9 +331,15 @@ impl Render for AppShell {
             None
         };
 
+        let mut key_context = KeyContext::new_with_defaults();
+        key_context.add("Workspace");
+        if todo_workspace {
+            key_context.add("Todos");
+        }
+
         v_flex()
             .size_full()
-            .key_context("Workspace")
+            .key_context(key_context)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(
                 |this, _: &crate::panda_actions::ToggleCommandPalette, window, cx| {
@@ -342,7 +353,17 @@ impl Render for AppShell {
             ))
             .on_action(
                 cx.listener(|this, _: &crate::panda_actions::NewMemo, window, cx| {
-                    this.create_memo(window, cx);
+                    if matches!(&this.mode, crate::state::Mode::Main(main) if main.workspace_mode == crate::state::WorkspaceMode::Todos)
+                    {
+                        this.create_todo(window, cx);
+                    } else {
+                        this.create_memo(window, cx);
+                    }
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::panda_actions::NewTodo, window, cx| {
+                    this.create_todo(window, cx);
                 }),
             )
             .on_action(

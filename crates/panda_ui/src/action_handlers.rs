@@ -6,7 +6,7 @@ use workspace::Save as WorkspaceSave;
 use zed_actions::command_palette::Toggle as CommandPaletteToggle;
 
 use crate::panda_actions::{
-    CreateJournal, DeleteMemo, FormatMemo, GoToLine, NewMemo, OpenAbout, OpenInstances,
+    CreateJournal, DeleteMemo, FormatMemo, GoToLine, NewMemo, NewTodo, OpenAbout, OpenInstances,
     OpenSettings, Quit, Refresh, SaveMemo, ToggleCommandPalette, ToggleNavPane, TogglePreview,
     ToggleStatusBar,
 };
@@ -36,7 +36,18 @@ pub fn init(cx: &mut App) {
     });
 
     cx.on_action(|_: &NewMemo, cx| {
-        with_main(cx, |shell, window, cx| shell.create_memo(window, cx));
+        with_main(cx, |shell, window, cx| {
+            if matches!(&shell.mode, crate::state::Mode::Main(main) if main.workspace_mode == crate::state::WorkspaceMode::Todos)
+            {
+                shell.create_todo(window, cx);
+            } else {
+                shell.create_memo(window, cx);
+            }
+        });
+    });
+
+    cx.on_action(|_: &NewTodo, cx| {
+        with_main(cx, |shell, window, cx| shell.create_todo(window, cx));
     });
 
     cx.on_action(|_: &CreateJournal, cx| {
@@ -52,7 +63,14 @@ pub fn init(cx: &mut App) {
     });
 
     cx.on_action(|_: &SaveMemo, cx| {
-        with_main(cx, |shell, _window, cx| shell.save_memo_now(cx));
+        with_main(cx, |shell, window, cx| {
+            if matches!(&shell.mode, crate::state::Mode::Main(main) if main.workspace_mode == crate::state::WorkspaceMode::Todos)
+            {
+                shell.save_todo(window, cx);
+            } else {
+                shell.save_memo_now(cx);
+            }
+        });
     });
 
     cx.on_action(|_: &FormatMemo, cx| {
@@ -60,7 +78,14 @@ pub fn init(cx: &mut App) {
     });
 
     cx.on_action(|_: &WorkspaceSave, cx| {
-        with_main(cx, |shell, _window, cx| shell.save_memo_now(cx));
+        with_main(cx, |shell, window, cx| {
+            if matches!(&shell.mode, crate::state::Mode::Main(main) if main.workspace_mode == crate::state::WorkspaceMode::Todos)
+            {
+                shell.save_todo(window, cx);
+            } else {
+                shell.save_memo_now(cx);
+            }
+        });
     });
 
     cx.on_action(|_: &TogglePreview, cx| {

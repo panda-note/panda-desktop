@@ -50,5 +50,19 @@
       "ctrl-alt-shift-t": "markdown::InsertTable",
       "ctrl-alt-minus": "markdown::InsertHorizontalRule"
     }
+  },
+  {
+    "context": "Todos",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-n": "panda::NewTodo"
+    }
+  },
+  {
+    "context": "Editor && Todos",
+    "use_key_equivalents": true,
+    "bindings": {
+      "ctrl-n": "panda::NewTodo"
+    }
   }
 ]

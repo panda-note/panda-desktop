@@ -10,7 +10,7 @@ use ui::{
     ListItemSpacing, TintColor,
 };
 
-use crate::panda_actions::NewMemo;
+use crate::panda_actions::{NewMemo, NewTodo};
 use crate::shell::AppShell;
 use crate::state::WorkspaceMode;
 use crate::state::{MemoDisplayMode, Mode};
@@ -368,12 +368,17 @@ impl AppShell {
         let priority_editor = main.todo_priority_editor.clone();
         let todo_save_in_flight = main.todo_save_in_flight;
         let mut pane = v_flex()
+            .key_context("Todos")
             .flex_1()
             .h_full()
             .min_w_0()
             .p_4()
             .gap_2()
-            .bg(cx.theme().colors().editor_background);
+            .bg(cx.theme().colors().editor_background)
+            .capture_action(cx.listener(|this, _: &NewMemo, window, cx| {
+                cx.stop_propagation();
+                this.create_todo(window, cx);
+            }));
         if let Some(todo) = todo {
             let id = todo.id.clone();
             let done = todo.status == panda_core::TodoStatus::Completed;
@@ -405,10 +410,16 @@ impl AppShell {
                 }
                 main.todo_priority_menu.clone().unwrap()
             };
+            let save_label = if todo_save_in_flight {
+                "Saving…"
+            } else {
+                "Save"
+            };
             let title = title_editor.map(|editor| {
                 let focus = editor.read(cx).focus_handle(cx);
                 div()
                     .id("todo-title-input")
+                    .key_context("Todos")
                     .h(px(36.))
                     .flex_1()
                     .min_w_0()
@@ -417,15 +428,13 @@ impl AppShell {
                     .px_2()
                     .track_focus(&focus)
                     .on_action(cx.listener(|this, _: &Confirm, window, cx| {
-                        this.save_todo(window, cx);
+                        this.focus_todo_note(window, cx);
+                    }))
+                    .on_action(cx.listener(|this, _: &editor::actions::Tab, window, cx| {
+                        this.focus_todo_note(window, cx);
                     }))
                     .child(editor)
             });
-            let save_label = if todo_save_in_flight {
-                "Saving…"
-            } else {
-                "Save"
-            };
             let metadata = h_flex()
                 .w_full()
                 .gap_2()
@@ -498,7 +507,7 @@ impl AppShell {
                             Button::new("todo-save", save_label)
                                 .style(ButtonStyle::Tinted(TintColor::Accent))
                                 .disabled(todo_save_in_flight)
-                                .tooltip(ui::Tooltip::text("Save task (Enter in title, Ctrl+S)"))
+                                .tooltip(ui::Tooltip::text("Save task (Ctrl+S)"))
                                 .on_click(
                                     cx.listener(|this, _, window, cx| this.save_todo(window, cx)),
                                 ),
@@ -508,16 +517,44 @@ impl AppShell {
                 .child(Divider::horizontal().color(DividerColor::BorderFaded))
                 .children(note_editor.map(|editor| {
                     div()
+                        .key_context("Todos")
                         .flex_1()
                         .min_h_0()
                         .w_full()
                         .p_2()
                         .rounded_md()
                         .bg(cx.theme().colors().editor_background)
+                        .capture_action(cx.listener(
+                            |this, _: &editor::actions::Backtab, window, cx| {
+                                cx.stop_propagation();
+                                this.focus_todo_title(window, cx);
+                            },
+                        ))
                         .child(editor)
                 }));
         } else {
-            pane = pane.child(Label::new("Select a task").color(Color::Muted));
+            let focus = self.focus_handle(cx);
+            let new_todo_binding = KeyBinding::for_action_in(&NewTodo, &focus, cx);
+            pane = pane.child(
+                v_flex()
+                    .flex_1()
+                    .size_full()
+                    .items_center()
+                    .justify_center()
+                    .gap_2()
+                    .child(
+                        Label::new("Select a task")
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .child(
+                        Button::new("empty-new-todo", "New Task")
+                            .key_binding(new_todo_binding)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.create_todo(window, cx);
+                            })),
+                    ),
+            );
         }
         div()
             .flex_1()
