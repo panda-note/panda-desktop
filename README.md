@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> Remove this line to confirm you've reviewed this PR before submitting.
+
 # Panda Note Desktop
 
 Zed-native three-pane Markdown notes — not an IDE, not a browser shell.

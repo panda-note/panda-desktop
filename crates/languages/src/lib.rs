@@ -1,3 +1,4 @@
+use futures::FutureExt as _;
 #[cfg(feature = "load-grammars")]
 use gpui::SharedString;
 use gpui::{App, UpdateGlobal};
@@ -434,13 +435,20 @@ fn register_language(
         config.hidden,
         manifest_name.clone(),
         Arc::new(move || {
-            Ok(LoadedLanguage {
-                config: config.clone(),
-                queries: grammars::load_queries(name),
-                context_provider: context.clone(),
-                toolchain_provider: toolchain.clone(),
-                manifest_name: manifest_name.clone(),
-            })
+            let config = config.clone();
+            let context = context.clone();
+            let toolchain = toolchain.clone();
+            let manifest_name = manifest_name.clone();
+            async move {
+                Ok(LoadedLanguage {
+                    config,
+                    queries: grammars::load_queries(name),
+                    context_provider: context,
+                    toolchain_provider: toolchain,
+                    manifest_name,
+                })
+            }
+            .boxed()
         }),
     );
 }
