@@ -1,7 +1,10 @@
-> [!IMPORTANT]
-> Remove this line to confirm you've reviewed this PR before submitting.
-
 # Panda Note Desktop
+
+[![Release](https://img.shields.io/github/v/release/panda-note/panda-desktop?display_name=tag&sort=semver)](https://github.com/panda-note/panda-desktop/releases/latest)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](./LICENSE-GPL)
+[![Rust](https://img.shields.io/badge/rust-1.97.1-orange?logo=rust)](./rust-toolchain.toml)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](#build)
+[![Based on Zed](https://img.shields.io/badge/based%20on-Zed-0842A0)](https://github.com/zed-industries/zed)
 
 Zed-native three-pane Markdown notes — not an IDE, not a browser shell.
 
