@@ -64,7 +64,7 @@ fn main() {
                 .load_fonts(cx)
                 .expect("failed to load fonts from assets");
 
-            let fs = Arc::new(RealFs::new(None, cx.background_executor().clone()));
+            let fs = RealFs::new(None, cx.background_executor().clone());
             <dyn Fs>::set_global(fs.clone(), cx);
 
             let languages = Arc::new(LanguageRegistry::new(cx.background_executor().clone()));

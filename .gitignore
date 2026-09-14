@@ -63,3 +63,4 @@ crates/docs_preprocessor/actions.json
 *.log
 
 .local*
+.cache
