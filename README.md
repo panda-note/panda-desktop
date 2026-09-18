@@ -34,14 +34,14 @@ You need a recent Rust toolchain (see `rust-toolchain.toml`) and a normal
 native build environment for your OS (MSVC on Windows, Xcode CLT on macOS,
 usual C/C++ deps on Linux — same bar as building Zed).
 
-### Release build (default)
+### Default build (`release-size`)
 
 There is **no CI packaging** for now (GitHub Actions minutes are limited). Build
 locally with the `release-size` profile when you want a shippable binary:
 size-first opts, fat LTO, stripped symbols.
 
 ```sh
-cargo build -p panda --profile release-size
+cargo panda
 ```
 
 Output (path depends on your `CARGO_TARGET_DIR` / Cargo defaults):
@@ -53,12 +53,12 @@ target/release-size/panda.exe  # Windows
 
 If you publish a GitHub Release later, attach a binary built this way.
 
-### Debug build
+### Debug build (explicit)
 
 Day-to-day iteration:
 
 ```sh
-cargo build -p panda
+cargo panda-debug
 ```
 
 ```text

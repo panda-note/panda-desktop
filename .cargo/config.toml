@@ -6,6 +6,8 @@ target-dir = "D:/cargo-target/panda-desktop"
 rustflags = ["-C", "symbol-mangling-version=v0", "--cfg", "tokio_unstable"]
 
 [alias]
+panda = ["build", "-p", "panda", "--profile", "release-size"]
+panda-debug = ["build", "-p", "panda"]
 xtask = "run --package xtask --"
 perf-test = ["test", "--profile", "release-fast", "--lib", "--bins", "--tests", "--all-features", "--config", "target.'cfg(true)'.runner='cargo run -p perf --release'", "--config", "target.'cfg(true)'.rustflags=[\"--cfg\", \"perf_enabled\"]"]
 # Keep similar flags here to share some ccache
