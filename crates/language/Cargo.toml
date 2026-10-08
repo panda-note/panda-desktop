@@ -36,10 +36,11 @@ test-support = [
 anyhow.workspace = true
 async-trait.workspace = true
 clock.workspace = true
-chardetng.workspace = true
 collections.workspace = true
+diffy.workspace = true
 ec4rs.workspace = true
 encoding_rs.workspace = true
+file_content.workspace = true
 fs.workspace = true
 futures.workspace = true
 futures-lite.workspace = true
@@ -53,7 +54,7 @@ itertools.workspace = true
 log.workspace = true
 lsp.workspace = true
 parking_lot.workspace = true
-postage.workspace = true
+postage = { workspace = true, features = ["futures-traits", "logging", "blocking"] }
 rand = { workspace = true, optional = true }
 regex.workspace = true
 rpc.workspace = true
@@ -69,7 +70,6 @@ sum_tree.workspace = true
 task.workspace = true
 text.workspace = true
 theme.workspace = true
-toml.workspace = true
 tracing.workspace = true
 grammars = { workspace = true, optional = true }
 tree-sitter-json = { workspace = true, optional = true }
@@ -78,12 +78,11 @@ tree-sitter-python = { workspace = true, optional = true }
 tree-sitter-rust = { workspace = true, optional = true }
 tree-sitter-typescript = { workspace = true, optional = true }
 tree-sitter = { workspace = true }
-unicase = "2.6"
+unicase.workspace = true
 util.workspace = true
 watch.workspace = true
 zlog.workspace = true
 ztracing.workspace = true
-diffy = "0.4.2"
 
 [dev-dependencies]
 collections = { workspace = true, features = ["test-support"] }
