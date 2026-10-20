@@ -51,7 +51,21 @@ target/release-size/panda      # macOS / Linux
 target/release-size/panda.exe  # Windows
 ```
 
-If you publish a GitHub Release later, attach a binary built this way.
+Windows installer (requires Inno Setup 6):
+
+```powershell
+script/build-panda-installer-windows.ps1
+```
+
+Linux AppImage (run from WSL2 or a native Linux system with the dependencies
+listed in `script/linux`; the script downloads the official AppImage tools):
+
+```sh
+bash script/build-panda-appimage.sh
+```
+
+Both packages are written under `dist/` and use the version from
+`crates/panda/Cargo.toml`.
 
 ### Debug build (explicit)
 

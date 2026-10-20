@@ -12666,10 +12666,11 @@ dependencies = [
 
 [[package]]
 name = "panda"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "assets",
+ "clap",
  "editor",
  "embed-resource",
  "fs",
@@ -12694,6 +12695,7 @@ dependencies = [
  "theme_settings",
  "vim",
  "vim_mode_setting",
+ "windows 0.62.2",
  "zed_actions",
 ]
 

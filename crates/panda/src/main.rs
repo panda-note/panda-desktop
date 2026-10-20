@@ -21,7 +21,14 @@ use theme::LoadThemes;
 use theme::{ActiveTheme, GlobalTheme};
 use vim_mode_setting::VimModeSetting;
 
+mod cli;
+
 fn main() {
+    if std::env::args_os().len() > 1 {
+        cli::run();
+        return;
+    }
+
     gpui_platform::application()
         .with_assets(Assets)
         .run(|cx: &mut App| {

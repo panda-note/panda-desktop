@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Panda Note
+Comment=Panda Note desktop client
+Exec=panda %U
+Icon=panda
+Type=Application
+Terminal=false
+Categories=Office;
+StartupWMClass=panda
